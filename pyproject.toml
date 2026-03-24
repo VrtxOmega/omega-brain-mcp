@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "omega-brain-mcp"
+version = "2.1.0"
+description = "Cross-session episodic memory for AI agents — provenance, Cortex, S.E.A.L. ledger, zero-config"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["mcp", "ai", "episodic-memory", "cortex", "veritas", "langchain", "crewai", "autogen"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Recommended: ONNX-based embeddings, zero GPU, ~30MB model cache
+onnx = ["fastembed>=0.2.0"]
+# Full: GPU-capable dense embeddings
+full = ["sentence-transformers>=2.0.0", "numpy"]
+
+[project.scripts]
+omega-brain-mcp = "omega_brain_mcp_standalone:cli"
+
+[tool.setuptools.py-modules]
+# single-file package
+omega_brain_mcp_standalone = "omega_brain_mcp_standalone"

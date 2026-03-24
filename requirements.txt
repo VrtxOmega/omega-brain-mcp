@@ -1,0 +1,4 @@
+mcp>=1.0.0
+
+# Optional: better embeddings
+# pip install sentence-transformers numpy
