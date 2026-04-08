@@ -863,7 +863,7 @@ if HAS_MCP:
                     f"SEAL CHAIN TAIL (last {n})\n"
                     f"  {'TIMESTAMP':<20} {'EVENT':<30} HASH\n"
                     f"{seal_tail}\n\n"
-                    f"HANDOFF: {'PRESENT \u2713' if _STARTUP_PRELOAD.get('handoff_present') else 'not found'}\n"
+                    f"HANDOFF: {'PRESENT ' + chr(0x2713) if _STARTUP_PRELOAD.get('handoff_present') else 'not found'}\n"
                     f"═══════════════════════════════════════════════════"
                 )
                 return [TextContent(type="text", text=report)]
