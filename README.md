@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="https://raw.githubusercontent.com/VrtxOmega/Gravity-Omega/master/omega_icon.png" width="100" alt="VERITAS" />
   <h1>OMEGA BRAIN MCP</h1>
   <p><strong>Standalone Model Context Protocol Server with Built-In Intelligence</strong></p>
   <p><em>One file. One dependency. Full sovereign cognition.</em></p>
