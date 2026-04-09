@@ -23,14 +23,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install mcp pytest pytest-asyncio
+          python -m pip install --upgrade pip
+          pip install mcp pytest pytest-asyncio pytest-cov
 
-      - name: Run invariant tests
+      - name: Verify standalone parses cleanly
+        run: python -c "import ast; ast.parse(open('omega_brain_mcp_standalone.py').read()); print('PARSE_OK')"
+
+      - name: Run tests with coverage
         env:
           PYTHONUTF8: "1"
           OMEGA_BRAIN_DATA_DIR: /tmp/omega-brain-ci
         run: |
-          pytest tests/ -v --tb=short
+          pytest tests/ -v --tb=short --cov=omega_brain_mcp_standalone
 
-      - name: Verify standalone parses cleanly
-        run: python -c "import ast; ast.parse(open('omega_brain_mcp_standalone.py').read()); print('PARSE_OK')"
