@@ -58,8 +58,9 @@ DB_PATH      = DATA_DIR / "omega_brain.db"
 HANDOFF_FILE = DATA_DIR / "handoff.json"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-_SESSION_ID   = str(uuid.uuid4())
-_CALL_COUNTER = 0
+_SESSION_ID      = str(uuid.uuid4())
+_CALL_COUNTER    = 0
+_SERVER_START_TS = datetime.now(timezone.utc)
 
 # Cortex thresholds (VERITAS Ω spec §14)
 STEER_FLOOR   = 0.45   # below → hard block (NAEF invariant)
@@ -876,9 +877,26 @@ if HAS_MCP:
                 ledger_count   = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
                 tape_count     = conn.execute("SELECT COUNT(*) FROM tape").fetchone()[0]
                 conn.close()
+                # Session age + break recommendation
+                session_age_min = int(
+                    (datetime.now(timezone.utc) - _SERVER_START_TS).total_seconds() / 60
+                )
+                break_recommended = session_age_min >= 90 or _CALL_COUNTER >= 60
+                if session_age_min >= 90:
+                    break_reason = (f"Session is {session_age_min} min old — quota pressure likely. "
+                                    f"Call omega_seal_task then start a new conversation.")
+                elif _CALL_COUNTER >= 60:
+                    break_reason = (f"{_CALL_COUNTER} tool calls this session — context growing. "
+                                    f"Call omega_seal_task then start a new conversation.")
+                else:
+                    break_reason = ""
                 return [TextContent(type="text", text=json.dumps({
                     "status": "ONLINE", "mode": "STANDALONE",
                     "session_id": _SESSION_ID, "call_counter": _CALL_COUNTER,
+                    "session_age_minutes":  session_age_min,
+                    "break_recommended":    break_recommended,
+                    "break_reason":         break_reason,
+                    "break_action":         "Call omega_seal_task then open a new conversation" if break_recommended else "",
                     "data_dir": str(DATA_DIR),
                     "embedding_engine": _EMBED_ENGINE,
                     "db_stats": {
@@ -1066,13 +1084,58 @@ if HAS_MCP:
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════
 
+async def run_sse(port: int):
+    try:
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+    except ImportError:
+        print("ERROR: SSE mode requires starlette and uvicorn. Run: pip install starlette uvicorn", file=sys.stderr)
+        sys.exit(1)
+        
+    from mcp.server.sse import SseServerTransport
+
+    sse = SseServerTransport("/messages")
+
+    async def handle_sse(request):
+        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+            await app.run(streams[0], streams[1], app.create_initialization_options())
+
+    async def handle_messages(request):
+        await sse.handle_post_message(request.scope, request.receive, request._send)
+
+    starlette_app = Starlette(
+        debug=True,
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ],
+    )
+    
+    config = uvicorn.Config(starlette_app, host="127.0.0.1", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 async def main():
     if not HAS_MCP:
         print("ERROR: pip install mcp", file=sys.stderr)
         sys.exit(1)
+        
+    import argparse
+    parser = argparse.ArgumentParser(description="Omega Brain MCP Standalone")
+    parser.add_argument("--sse", action="store_true", help="Run over SSE instead of stdio")
+    parser.add_argument("--port", type=int, default=8055, help="Port for SSE server (default 8055)")
+    args, unknown = parser.parse_known_args()
+
     log.info(f"[omega-brain] Standalone v2.0 | session={_SESSION_ID} | data={DATA_DIR}")
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    
+    if args.sse:
+        log.info(f"[omega-brain] Starting SSE Server on port {args.port}")
+        await run_sse(args.port)
+    else:
+        log.info("[omega-brain] Starting stdio server")
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
 
 def cli():
     import asyncio
