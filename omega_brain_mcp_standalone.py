@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Omega Brain MCP — Standalone Edition v2.0
+Omega Brain MCP + VERITAS Build Gates — Standalone Edition v2.1.0
 ==========================================
 A fully self-contained MCP server with built-in:
   - Provenance layer (RAG, fragment ingestion, VERITAS scoring)
@@ -45,6 +45,21 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# VERITAS Omega Build Gates — deterministic gate pipeline
+try:
+    from veritas_build_gates import (
+        run_pipeline, intake_gate, type_gate, dependency_gate,
+        evidence_gate, math_gate, cost_gate, incentive_gate,
+        security_gate, adversary_gate, trace_seal,
+        compute_claim_id, compute_policy_hash,
+        mis_greedy, quality as compute_quality, agreement as compute_agreement,
+        Verdict, CLAEG, GATE_ORDER,
+        resolve_thresholds, canonical_hash,
+    )
+    HAS_BUILD_GATES = True
+except ImportError:
+    HAS_BUILD_GATES = False
 
 log = logging.getLogger("OmegaBrain.Standalone")
 
@@ -575,6 +590,204 @@ def _detect_context_mode(task: str, handoff: dict) -> tuple[str, float]:
     return "FRESH_START", 0.0
 
 # ══════════════════════════════════════════════════════════════════
+# VERITAS Ω BUILD GATE — MCP TOOL DEFINITIONS
+# ══════════════════════════════════════════════════════════════════
+
+def _veritas_build_tools():
+    """Return MCP Tool definitions for the VERITAS Build gate pipeline."""
+    from mcp.types import Tool
+    CLAIM_SCHEMA = {
+        "type": "object",
+        "description": "Full or partial VERITAS BuildClaim object",
+        "properties": {
+            "project": {"type": "string"},
+            "version": {"type": "string"},
+            "commit": {"type": "string"},
+            "primitives": {"type": "array", "items": {"type": "object"}},
+            "operators": {"type": "array", "items": {"type": "object"}},
+            "regimes": {"type": "array", "items": {"type": "object"}},
+            "boundaries": {"type": "array", "items": {"type": "object"}},
+            "loss_models": {"type": "array", "items": {"type": "object"}},
+            "evidence": {"type": "array", "items": {"type": "object"}},
+            "cost": {"type": "object"},
+            "cost_bounds": {"type": "object"},
+            "dependencies": {"type": "object"},
+            "security": {"type": "object"},
+            "attack_suite": {"type": "object"},
+            "policy": {"type": "object"},
+        },
+    }
+    return [
+        # ── Individual Gates ──
+        Tool(name="veritas_intake_gate",
+             description="VERITAS Gate 1/10: INTAKE. Canonicalizes input, validates required fields, computes ClaimID. Undeclared assumptions terminate evaluation.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_type_gate",
+             description="VERITAS Gate 2/10: TYPE. Enforces unique primitives, validates domains, checks operator arity, unit consistency. Pure type-level verification.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_dependency_gate",
+             description="VERITAS Gate 3/10: DEPENDENCY. SBOM scan, CVE check, integrity verification, license compatibility, depth analysis. Supply chain is first-class attack surface.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_evidence_gate",
+             description="VERITAS Gate 4/10: EVIDENCE. Runs MIS_GREEDY independence check, computes Quality(e), checks K_min/A_min/Q_min, coverage, mutation kill rate, lint. The server calculates — AI does not guess.",
+             inputSchema={"type": "object", "properties": {
+                 "claim": CLAIM_SCHEMA,
+                 "regime": {"type": "string", "description": "Build regime: dev|staging|production", "default": "dev"},
+             }, "required": ["claim"]}),
+        Tool(name="veritas_math_gate",
+             description="VERITAS Gate 5/10: MATH. Translates boundary constraints to interval arithmetic. Feeds measured values as bindings. SAT/UNSAT/TIMEOUT — no narrative.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_cost_gate",
+             description="VERITAS Gate 6/10: COST. Checks resource utilization against bounds. REDLINE_CRITICAL (0.95) => VIOLATION. REDLINE_WARNING (0.80) => MODEL_BOUND.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_incentive_gate",
+             description="VERITAS Gate 7/10: INCENTIVE. Detects source dominance (>50% from one source) and vendor concentration (>70% from one registry). Guards against monoculture.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_security_gate",
+             description="VERITAS Gate 8/10: SECURITY. SAST findings, secret detection, injection surface, auth boundary, TLS/crypto. Zero tolerance on CRITICAL/secrets/injection.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+        Tool(name="veritas_adversary_gate",
+             description="VERITAS Gate 9/10: ADVERSARY. Fuzz, mutation, exploit, supply-chain injection, outage, spike-load. Fragility > 25% => MODEL_BOUND. Any exploit success => VIOLATION.",
+             inputSchema={"type": "object", "properties": {"claim": CLAIM_SCHEMA}, "required": ["claim"]}),
+
+        # ── Full Pipeline ──
+        Tool(name="veritas_run_pipeline",
+             description=(
+                 "Run the full VERITAS Omega 10-gate pipeline: "
+                 "INTAKE->TYPE->DEPENDENCY->EVIDENCE->MATH->COST->INCENTIVE->SECURITY->ADVERSARY->TRACE/SEAL. "
+                 "Returns final verdict, all gate results, reason codes, and tamper-proof seal hash. "
+                 "fail_fast=true (default) halts on first VIOLATION."
+             ),
+             inputSchema={"type": "object", "properties": {
+                 "claim": CLAIM_SCHEMA,
+                 "fail_fast": {"type": "boolean", "default": True, "description": "Halt pipeline on first VIOLATION (spec default)"},
+             }, "required": ["claim"]}),
+
+        # ── Evidence Utilities ──
+        Tool(name="veritas_compute_quality",
+             description="Compute VERITAS Quality(e) score for a single evidence item. Returns clamp01(0.40*prov + 0.25*repeat + 0.20*fresh + 0.15*env).",
+             inputSchema={"type": "object", "properties": {
+                 "evidence_item": {"type": "object", "description": "Single evidence item with provenance, method, timestamp, ttl_seconds"},
+                 "policy_env": {"type": "object", "description": "Policy environment spec for match scoring", "default": {}},
+             }, "required": ["evidence_item"]}),
+        Tool(name="veritas_mis_greedy",
+             description="Run MIS_GREEDY algorithm on a set of evidence items. Returns the maximum independent set — evidence with no source overlap or dependency.",
+             inputSchema={"type": "object", "properties": {
+                 "evidence_items": {"type": "array", "items": {"type": "object"}, "description": "Evidence items to find independent set from"},
+             }, "required": ["evidence_items"]}),
+
+        # ── CLAEG ──
+        Tool(name="veritas_claeg_resolve",
+             description="CLAEG: Map a VERITAS verdict to a terminal state (STABLE_CONTINUATION | ISOLATED_CONTAINMENT | TERMINAL_SHUTDOWN). No narrative framing.",
+             inputSchema={"type": "object", "properties": {
+                 "verdict": {"type": "string", "enum": ["PASS", "MODEL_BOUND", "INCONCLUSIVE", "VIOLATION"]},
+             }, "required": ["verdict"]}),
+        Tool(name="veritas_claeg_transition",
+             description="CLAEG: Validate a state transition. Absence of an allowed transition is treated as prohibition. Returns allowed/prohibited.",
+             inputSchema={"type": "object", "properties": {
+                 "current_state": {"type": "string"},
+                 "target_state": {"type": "string"},
+             }, "required": ["current_state", "target_state"]}),
+
+        # ── NAFE Guardrails ──
+        Tool(name="veritas_nafe_scan",
+             description=(
+                 "NAFE post-incident analysis: scan text for failure signatures. "
+                 "Detects Narrative Rescue, Moral Override, Authority Drift, Intent Inference. "
+                 "The AI cannot use narrative to bypass deterministic gate verdicts."
+             ),
+             inputSchema={"type": "object", "properties": {
+                 "text": {"type": "string", "description": "Text to scan for NAFE failure signatures"},
+             }, "required": ["text"]}),
+    ]
+
+
+def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
+    """Handle VERITAS Build gate tool calls. Returns JSON string or None if not a veritas tool."""
+    if not HAS_BUILD_GATES:
+        return json.dumps({"error": "VERITAS Build Gates not available. Check veritas_build_gates.py."})
+
+    if name == "veritas_intake_gate":
+        return json.dumps(intake_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_type_gate":
+        return json.dumps(type_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_dependency_gate":
+        return json.dumps(dependency_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_evidence_gate":
+        regime = arguments.get("regime", "dev")
+        return json.dumps(evidence_gate(arguments.get("claim", {}), regime), indent=2, default=str)
+
+    if name == "veritas_math_gate":
+        return json.dumps(math_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_cost_gate":
+        return json.dumps(cost_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_incentive_gate":
+        return json.dumps(incentive_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_security_gate":
+        return json.dumps(security_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_adversary_gate":
+        return json.dumps(adversary_gate(arguments.get("claim", {})), indent=2, default=str)
+
+    if name == "veritas_run_pipeline":
+        fail_fast = arguments.get("fail_fast", True)
+        result = run_pipeline(arguments.get("claim", {}), fail_fast=fail_fast)
+        # Auto-seal to SEAL ledger
+        _seal_event("veritas_pipeline_run", {
+            "claim_id": result.get("claim_id", "")[:32],
+            "verdict": result.get("final_verdict", ""),
+            "regime": result.get("regime", ""),
+            "seal": result.get("final_seal", "")[:32],
+        })
+        return json.dumps(result, indent=2, default=str)
+
+    if name == "veritas_compute_quality":
+        q = compute_quality(arguments.get("evidence_item", {}), arguments.get("policy_env", {}))
+        return json.dumps({"quality": round(q, 6)})
+
+    if name == "veritas_mis_greedy":
+        items = arguments.get("evidence_items", [])
+        independent = mis_greedy(items)
+        agr = compute_agreement(independent)
+        return json.dumps({
+            "independent_set": independent,
+            "independent_count": len(independent),
+            "total_items": len(items),
+            "agreement": round(agr, 6),
+        }, indent=2, default=str)
+
+    if name == "veritas_claeg_resolve":
+        verdict = arguments.get("verdict", "")
+        state = CLAEG.resolve(verdict)
+        return json.dumps({
+            "verdict": verdict,
+            "terminal_state": state,
+            "invariant": "Human presence is a logged condition, not an authority.",
+        })
+
+    if name == "veritas_claeg_transition":
+        current = arguments.get("current_state", "")
+        target = arguments.get("target_state", "")
+        result = CLAEG.validate_transition(current, target)
+        return json.dumps(result)
+
+    if name == "veritas_nafe_scan":
+        text = arguments.get("text", "")
+        result = CLAEG.check_narrative_injection(text)
+        if not result["clean"]:
+            _seal_event("nafe_violation", {"flags": result["flags"][:5]})
+        return json.dumps(result, indent=2)
+
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════
 # MCP SERVER
 # ══════════════════════════════════════════════════════════════════
 
@@ -679,7 +892,7 @@ if HAS_MCP:
             Tool(name="omega_brain_status",
                  description="Unified brain health: vault stats, fragment count, ledger entries, session ID.",
                  inputSchema={"type": "object", "properties": {}}),
-        ]
+        ] + (_veritas_build_tools() if HAS_BUILD_GATES else [])
 
     @app.call_tool()
     async def call_tool(name: str, arguments: dict) -> list:
@@ -776,6 +989,18 @@ if HAS_MCP:
                     "omega_cortex_check":    lambda a: json.dumps(_cortex_check(a.get("tool",""), a.get("args",{}), a.get("baseline_prompt","")), indent=2),
                     "omega_brain_status":    lambda a: "{}",
                 }
+                # Add VERITAS tools to internal dispatch if available
+                if HAS_BUILD_GATES:
+                    _INTERNAL_DISPATCH.update({
+                        k: (lambda n: lambda a: _handle_veritas_tool(n, a) or "{}")(k)
+                        for k in [
+                            "veritas_intake_gate", "veritas_type_gate", "veritas_dependency_gate",
+                            "veritas_evidence_gate", "veritas_math_gate", "veritas_cost_gate",
+                            "veritas_incentive_gate", "veritas_security_gate", "veritas_adversary_gate",
+                            "veritas_run_pipeline", "veritas_compute_quality", "veritas_mis_greedy",
+                            "veritas_claeg_resolve", "veritas_claeg_transition", "veritas_nafe_scan",
+                        ]
+                    })
                 if target_tool not in _INTERNAL_DISPATCH:
                     return [TextContent(type="text", text=json.dumps({
                         "executed": False,
@@ -908,6 +1133,12 @@ if HAS_MCP:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }, indent=2))]
 
+            # VERITAS Build Gate tools
+            if name.startswith("veritas_"):
+                vr = _handle_veritas_tool(name, arguments)
+                if vr is not None:
+                    return [TextContent(type="text", text=vr)]
+
             return [TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
 
 
@@ -934,6 +1165,21 @@ if HAS_MCP:
             Resource(uri="omega://brain/status", name="Omega Brain Status",
                      description="DB stats, embedding engine, ledger count.",
                      mimeType="application/json"),
+            Resource(uri="veritas://spec/v1.0.0", name="VERITAS Omega Build Spec v1.0.0",
+                     description="Canonical specification: invariants, thresholds, gate order, type system. Read-only source of truth.",
+                     mimeType="application/json"),
+            Resource(uri="veritas://claeg/grammar", name="CLAEG Grammar",
+                     description="Constraint-Locked Alignment Evaluation Grammar: terminal states, allowed transitions, prohibitions.",
+                     mimeType="application/json"),
+            Resource(uri="veritas://gates/order", name="VERITAS Gate Order",
+                     description="The 10-gate pipeline order: INTAKE->TYPE->DEPENDENCY->EVIDENCE->MATH->COST->INCENTIVE->SECURITY->ADVERSARY->TRACE/SEAL",
+                     mimeType="application/json"),
+            Resource(uri="veritas://thresholds/baseline", name="VERITAS Baseline Thresholds",
+                     description="Numeric thresholds for dev/baseline regime.",
+                     mimeType="application/json"),
+            Resource(uri="veritas://thresholds/production", name="VERITAS Production Thresholds",
+                     description="Escalated numeric thresholds for production/release regime.",
+                     mimeType="application/json"),
         ]
 
     @app.read_resource()
@@ -952,6 +1198,44 @@ if HAS_MCP:
             lc = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
             conn.close()
             return json.dumps({"fragments": fc, "ledger_entries": lc, "mode": "STANDALONE"})
+        if uri == "veritas://spec/v1.0.0":
+            spec_path = Path(__file__).parent.parent / "VERITAS_OMEGA_BUILD_SPEC_v1_0_0.md"
+            if spec_path.exists():
+                return spec_path.read_text(encoding="utf-8")
+            return json.dumps({"error": "Spec file not found", "searched": str(spec_path)})
+        elif uri == "veritas://claeg/grammar":
+            if HAS_BUILD_GATES:
+                return json.dumps({
+                    "terminal_states": list(CLAEG.TERMINAL_STATES),
+                    "transitions": {k: list(v) for k, v in CLAEG.TRANSITIONS.items()},
+                    "invariants": [
+                        "Undeclared assumptions terminate evaluation.",
+                        "Absence of an allowed transition is treated as prohibition.",
+                        "Human presence is a logged condition, not an authority.",
+                        "Policy invariants are binding and non-discretionary.",
+                    ],
+                    "prohibited_inferences": [
+                        "Intent inference",
+                        "Motive attribution",
+                        "Preference assumption",
+                    ],
+                }, indent=2)
+            return json.dumps({"error": "Build gates not loaded"})
+        elif uri == "veritas://gates/order":
+            if HAS_BUILD_GATES:
+                return json.dumps({"gate_order": GATE_ORDER, "count": len(GATE_ORDER)})
+            return json.dumps({"gate_order": [
+                "INTAKE","TYPE","DEPENDENCY","EVIDENCE","MATH",
+                "COST","INCENTIVE","SECURITY","ADVERSARY","TRACE_SEAL"
+            ]})
+        elif uri == "veritas://thresholds/baseline":
+            if HAS_BUILD_GATES:
+                return json.dumps(resolve_thresholds("dev"), indent=2)
+            return json.dumps({"error": "Build gates not loaded"})
+        elif uri == "veritas://thresholds/production":
+            if HAS_BUILD_GATES:
+                return json.dumps(resolve_thresholds("production"), indent=2)
+            return json.dumps({"error": "Build gates not loaded"})
         return json.dumps({"error": f"Unknown resource: {uri}"})
 
     # ── Prompts ──────────────────────────────────────────────────
@@ -1127,7 +1411,7 @@ async def main():
     parser.add_argument("--port", type=int, default=8055, help="Port for SSE server (default 8055)")
     args, unknown = parser.parse_known_args()
 
-    log.info(f"[omega-brain] Standalone v2.0 | session={_SESSION_ID} | data={DATA_DIR}")
+    log.info(f"[omega-brain] Standalone v2.1.0 + Build Gates | session={_SESSION_ID} | data={DATA_DIR}")
     
     if args.sse:
         log.info(f"[omega-brain] Starting SSE Server on port {args.port}")

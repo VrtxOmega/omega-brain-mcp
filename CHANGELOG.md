@@ -1,5 +1,62 @@
 # Changelog
 
+## v2.1.0 — 2026-04-09
+
+**VERITAS Omega Build Gates — 10-gate deterministic build pipeline.**
+
+### Added
+
+**VERITAS Build Gate Pipeline (10 gates)**
+- `veritas_build_gates.py` — Pure deterministic gate engine, ~1430 lines, zero narrative framing
+- Gate Order: INTAKE → TYPE → DEPENDENCY → EVIDENCE → MATH → COST → INCENTIVE → SECURITY → ADVERSARY → TRACE/SEAL
+- Fail-fast by default: any gate returning VIOLATION halts execution
+- `veritas_run_pipeline` — Full pipeline runner with final verdict + cryptographic seal hash
+
+**Build Gate Tools (15 new tools)**
+- Individual gate tools: `veritas_intake_gate` through `veritas_adversary_gate`
+- Evidence utilities: `veritas_compute_quality`, `veritas_mis_greedy`
+- CLAEG tools: `veritas_claeg_resolve`, `veritas_claeg_transition`
+- NAFE scanner: `veritas_nafe_scan`
+
+**Resources (5 new)**
+- `veritas://spec/v1.0.0` — Canonical specification (read-only source of truth)
+- `veritas://claeg/grammar` — Terminal states, transitions, invariants, prohibitions
+- `veritas://gates/order` — 10-gate pipeline sequence
+- `veritas://thresholds/baseline` — Dev regime numeric thresholds
+- `veritas://thresholds/production` — Escalated production regime thresholds
+
+**Evidence Engine**
+- Quality(e) = clamp01(0.40×provenance + 0.25×repeatability + 0.20×freshness + 0.15×env_match)
+- MIS_GREEDY — Maximum Independent Set greedy algorithm for evidence independence
+- Agreement — Numeric interval overlap and binary pass-rate computation
+
+**CLAEG State Machine**
+- 3 terminal states: STABLE_CONTINUATION, ISOLATED_CONTAINMENT, TERMINAL_SHUTDOWN
+- Prohibited inferences: intent, motive, preference
+- Absorbing state: TERMINAL_SHUTDOWN has no exit transitions
+
+**NAFE Guardrails**
+- Narrative Rescue detection (explaining away VIOLATIONs)
+- Moral Override detection (ethical framing to bypass gates)
+- Authority Drift detection (AI assuming ungranted authority)
+- Intent Inference detection (inferring developer motive)
+- Auto-sealed to SEAL ledger as `nafe_violation`
+
+**Verdict System**
+- PASS, MODEL_BOUND, INCONCLUSIVE, VIOLATION (precedence order)
+- Final pipeline verdict = worst across all gates
+
+### Changed
+- `omega_execute` now dispatches to all 15 Build Gate tools in addition to Brain Core tools
+- `omega_brain_report` version identifier updated
+
+### Invariants (added)
+- 10-gate order is fixed and acyclic
+- CLAEG transitions: absence of allowed transition = prohibition
+- TERMINAL_SHUTDOWN is absorbing (no exit)
+- FRAGILITY_MAX_MODEL_BOUND = 0.25
+- REDLINE_CRITICAL = 0.95, REDLINE_WARNING = 0.80
+
 ## v2.0.0 — 2026-03-24
 
 **First public release.**

@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "omega-brain-mcp"
 version = "2.1.0"
-description = "Cross-session episodic memory for AI agents — provenance, Cortex, S.E.A.L. ledger, zero-config"
+description = "Cross-session episodic memory + 10-gate VERITAS Build pipeline for AI agents — provenance, Cortex, S.E.A.L. ledger, CLAEG, NAFE, zero-config"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -32,5 +32,5 @@ full = ["sentence-transformers>=2.0.0", "numpy"]
 omega-brain-mcp = "omega_brain_mcp_standalone:cli"
 
 [tool.setuptools.py-modules]
-# single-file package
 omega_brain_mcp_standalone = "omega_brain_mcp_standalone"
+veritas_build_gates = "veritas_build_gates"
