@@ -31,6 +31,6 @@ full = ["sentence-transformers>=2.0.0", "numpy"]
 [project.scripts]
 omega-brain-mcp = "omega_brain_mcp_standalone:cli"
 
-[tool.setuptools.py-modules]
-omega_brain_mcp_standalone = "omega_brain_mcp_standalone"
-veritas_build_gates = "veritas_build_gates"
+[tool.setuptools]
+py-modules = ["omega_brain_mcp_standalone", "veritas_build_gates"]
+
