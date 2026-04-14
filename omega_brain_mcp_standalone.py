@@ -611,63 +611,60 @@ def _veritas_build_tools():
     CLAIM_SCHEMA = {
         "type": "object",
         "description": (
-            "A VERITAS BuildClaim object containing all declared primitives, operators, "
-            "regimes, boundaries, loss models, evidence items, cost vectors, and policy "
-            "configuration needed for deterministic gate evaluation. "
-            "All fields are optional for partial evaluation — only the fields relevant "
-            "to the gate being invoked are required."
+            "A VERITAS BuildClaim object for deterministic gate evaluation. "
+            "All fields are optional for partial evaluation — only fields relevant to the invoked gate are required."
         ),
         "properties": {
-            "project": {"type": "string", "description": "Unique project identifier, e.g. 'omega-brain-mcp'."},
-            "version": {"type": "string", "description": "Semantic version string of the build being evaluated, e.g. '2.1.0'."},
-            "commit": {"type": "string", "description": "Git commit SHA for reproducibility and audit trail."},
+            "project": {"type": "string", "description": "Project identifier, e.g. 'omega-brain-mcp'."},
+            "version": {"type": "string", "description": "Semantic version, e.g. '2.1.0'."},
+            "commit": {"type": "string", "description": "Git commit SHA for reproducibility."},
             "primitives": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Declared typed variables with name, domain (Interval/EnumSet/FiniteSet), optional units, and description."
+                "description": "Typed variables with name, domain (Interval/EnumSet/FiniteSet), optional units."
             },
             "operators": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Declared operators with name, arity, input primitive names, output primitive name, and totality flag."
+                "description": "Operators with name, arity, input/output primitive names, totality flag."
             },
             "regimes": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Named operating regimes, each with a predicate ConstraintExpr over declared primitives."
+                "description": "Operating regimes with name and predicate ConstraintExpr."
             },
             "boundaries": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Named boundary constraints (e.g. 'CAPEX_USD <= 100000') that the claim must satisfy."
+                "description": "Boundary constraints, e.g. {name: 'cap', constraint: 'CAPEX_USD <= 100000'}."
             },
             "loss_models": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Named loss functions as ArithmeticExpr over primitives, with optional upper bounds."
+                "description": "Loss functions as ArithmeticExpr with optional upper bounds."
             },
             "evidence": {
                 "type": "array", "items": {"type": "object"},
-                "description": "Evidence items, each with id, variable, value (Numeric or Categorical), timestamp, method, provenance, and optional dependencies."
+                "description": "Evidence items with id, variable, value, timestamp, method, provenance."
             },
             "cost": {
                 "type": "object",
-                "description": "CostVector with optional fields: compute_flops, memory_bytes, wall_clock_s, capital_usd, coordination_agents."
+                "description": "CostVector: compute_flops, memory_bytes, wall_clock_s, capital_usd, coordination_agents."
             },
             "cost_bounds": {
                 "type": "object",
-                "description": "Upper bounds for each cost component. Utilization = max(cost_i / bound_i). Values must be > 0."
+                "description": "Upper bounds for each cost component. All values must be > 0."
             },
             "dependencies": {
                 "type": "object",
-                "description": "SBOM-style dependency manifest for supply-chain analysis: package names, versions, registries, and integrity hashes."
+                "description": "SBOM-style dependency manifest: package names, versions, registries, hashes."
             },
             "security": {
                 "type": "object",
-                "description": "Security posture declaration: SAST results, secret scan findings, injection surfaces, auth boundaries, and TLS/crypto configuration."
+                "description": "Security posture: SAST results, secret scan, injection surfaces, auth, TLS config."
             },
             "attack_suite": {
                 "type": "object",
-                "description": "AttackSuite with suite_id and list of Attack transforms (InflateBound, RemoveEvidence, PerturbParam, PerturbEvidence) for adversary gate."
+                "description": "Attack transforms for adversary testing: InflateBound, RemoveEvidence, PerturbParam, PerturbEvidence."
             },
             "policy": {
                 "type": "object",
-                "description": "PolicyConfig overrides: hash_alg, solver_backend, timeouts, thresholds. Defaults to VERITAS Omega v1.3.1 canonical values if omitted."
+                "description": "PolicyConfig overrides for hash_alg, solver_backend, timeouts, thresholds."
             },
         },
     }
@@ -675,100 +672,87 @@ def _veritas_build_tools():
         # ── Individual Gates ──
         Tool(name="veritas_intake_gate",
              description=(
-                 "VERITAS Gate 1/10: INTAKE. Parses and canonicalizes a BuildClaim, validates all required fields are present, "
-                 "computes deterministic EvidenceIDs and ClaimID via SHA-256 hashing. "
-                 "Use this gate first to validate claim structure before running downstream gates. "
-                 "Returns PASS with claim_id and counts, or VIOLATION with reason code INTAKE_ID_MISMATCH if provided IDs conflict."
+                 "Gate 1/10: Parses, canonicalizes, and validates a BuildClaim's structure and computes SHA-256 IDs. "
+                 "Use this first to validate claim structure before running any downstream gates. "
+                 "Returns JSON with fields: verdict (PASS | VIOLATION), claim_id (hex), primitive_count (int), evidence_count (int)."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_type_gate",
              description=(
-                 "VERITAS Gate 2/10: TYPE. Performs pure type-level verification on a BuildClaim. "
-                 "Enforces unique primitive names, non-empty domains, correct operator arity and input/output resolution, "
-                 "defined symbols in all expressions, and unit consistency between primitives and evidence. "
-                 "Returns PASS (TYPE_OK) or VIOLATION with reason codes: TYPE_DUPLICATE_PRIMITIVE, TYPE_EMPTY_DOMAIN, "
-                 "TYPE_OPERATOR_ARITY, UNDEFINED_SYMBOL, or UNIT_MISMATCH."
+                 "Gate 2/10: Enforces type-level correctness — unique primitives, non-empty domains, operator arity, symbol resolution, and unit consistency. "
+                 "Use this after intake to catch structural errors before evidence evaluation. "
+                 "Returns JSON with verdict (PASS | VIOLATION) and reason_code: TYPE_OK, TYPE_DUPLICATE_PRIMITIVE, TYPE_EMPTY_DOMAIN, TYPE_OPERATOR_ARITY, UNDEFINED_SYMBOL, or UNIT_MISMATCH."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_dependency_gate",
              description=(
-                 "VERITAS Gate 3/10: DEPENDENCY. Performs supply-chain security analysis on declared dependencies. "
-                 "Runs SBOM scan, CVE vulnerability check, integrity hash verification, license compatibility analysis, "
-                 "and dependency depth analysis. Supply chain is treated as a first-class attack surface. "
-                 "Returns PASS, MODEL_BOUND, or VIOLATION with detailed findings per dependency."
+                 "Gate 3/10: Analyzes supply-chain security via SBOM scan, CVE check, integrity verification, license compatibility, and dependency depth. "
+                 "Use this to assess third-party dependency risk before deploying or releasing. "
+                 "Returns JSON with verdict (PASS | MODEL_BOUND | VIOLATION) and per-dependency findings array."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_evidence_gate",
              description=(
-                 "VERITAS Gate 4/10: EVIDENCE. Evaluates evidence sufficiency for all critical variables referenced "
-                 "in regime/boundary/loss expressions. For each variable: builds an independence graph, runs MIS_GREEDY "
-                 "to find the maximum independent set, then checks K_min (independent count), A_min (agreement), and "
-                 "Q_min (quality) thresholds. All calculations are server-side — the AI does not guess scores. "
-                 "Returns PASS (EVIDENCE_OK) or INCONCLUSIVE with reason codes: INSUFFICIENT_INDEPENDENCE, "
-                 "LOW_AGREEMENT, or LOW_QUALITY."
+                 "Gate 4/10: Evaluates evidence sufficiency for critical variables by computing independence (MIS_GREEDY), agreement, and quality scores. "
+                 "Use this to verify that evidence meets K_min, A_min, Q_min thresholds; use veritas_compute_quality or veritas_mis_greedy for individual calculations. "
+                 "Returns JSON with verdict (PASS | INCONCLUSIVE) and reason_code: EVIDENCE_OK, INSUFFICIENT_INDEPENDENCE, LOW_AGREEMENT, or LOW_QUALITY."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA,
                  "regime": {
                      "type": "string",
-                     "description": "Build regime that determines evidence threshold strictness. 'dev' uses baseline thresholds (K=2, A=0.80, Q=0.70), 'production' uses escalated irreversibility thresholds (K=3, A=0.90, Q=0.80).",
+                     "description": "Threshold strictness: 'dev' (K=2, A=0.80, Q=0.70), 'staging' (same as dev), 'production' (K=3, A=0.90, Q=0.80).",
                      "default": "dev",
                      "enum": ["dev", "staging", "production"]
                  },
              }, "required": ["claim"]}),
         Tool(name="veritas_math_gate",
              description=(
-                 "VERITAS Gate 5/10: MATH. Translates all boundary constraints and regime predicates into interval arithmetic "
-                 "or SMT-LIB formulas, then feeds measured evidence values as variable bindings. Returns SAT (constraints are "
-                 "satisfiable — PASS, MATH_OK), UNSAT (contradiction found — VIOLATION, UNSAT_CONSTRAINT), or TIMEOUT "
-                 "(solver exceeded time limit — INCONCLUSIVE, DECIDABILITY_TIMEOUT). No narrative interpretation of results."
+                 "Gate 5/10: Translates boundary constraints into interval arithmetic or SMT formulas and checks satisfiability with evidence values. "
+                 "Use this after evidence gate to verify that measured values satisfy all declared constraints. "
+                 "Returns JSON with verdict (PASS | VIOLATION | INCONCLUSIVE) and reason_code: MATH_OK, UNSAT_CONSTRAINT, or DECIDABILITY_TIMEOUT."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_cost_gate",
              description=(
-                 "VERITAS Gate 6/10: COST. Computes resource utilization as max(cost_i / bound_i) across all declared cost "
-                 "components with bounds. Utilization >= 0.95 (REDLINE_CRITICAL) returns MODEL_BOUND with code COST_REDLINING. "
-                 "Utilization >= 0.80 (REDLINE_WARNING) emits a warning but still PASS. Missing bounds on declared costs "
-                 "return INCONCLUSIVE with code UNDECLARED_COST_BOUND. If no cost vector is provided, returns PASS (COST_NOT_APPLICABLE)."
+                 "Gate 6/10: Computes resource utilization as max(cost_i / bound_i) and checks against redline thresholds. "
+                 "Use this to verify cost budgets are within limits; skipped automatically if no cost vector is declared. "
+                 "Returns JSON with verdict (PASS | MODEL_BOUND | INCONCLUSIVE), utilization (float), and reason_code: COST_OK, COST_REDLINING, COST_NOT_APPLICABLE, or UNDECLARED_COST_BOUND."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_incentive_gate",
              description=(
-                 "VERITAS Gate 7/10: INCENTIVE. Detects evidence monoculture by computing source dominance for each critical "
-                 "variable's independent set. Dominance = max_count_by_source_id / |independent_set|. "
-                 "If dominance exceeds 0.50 (more than half of independent evidence from a single source), returns "
-                 "MODEL_BOUND with code DOMINANCE_DETECTED. Otherwise returns PASS (INCENTIVE_OK)."
+                 "Gate 7/10: Detects evidence monoculture by measuring source dominance (max_count_from_single_source / independent_set_size). "
+                 "Use this to guard against single-source bias in evidence; dominance > 0.50 triggers MODEL_BOUND. "
+                 "Returns JSON with verdict (PASS | MODEL_BOUND), dominance (float), and reason_code: INCENTIVE_OK or DOMINANCE_DETECTED."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_security_gate",
              description=(
-                 "VERITAS Gate 8/10: SECURITY. Evaluates security posture from SAST findings, secret detection scans, "
-                 "injection surface analysis, authentication boundary verification, and TLS/crypto configuration. "
-                 "Zero tolerance policy: any CRITICAL finding, exposed secret, or unguarded injection surface "
-                 "results in VIOLATION. Returns PASS, MODEL_BOUND, or VIOLATION with detailed security findings."
+                 "Gate 8/10: Evaluates security posture from SAST, secret detection, injection surfaces, auth boundaries, and TLS config. "
+                 "Use this to enforce zero-tolerance security policy — any CRITICAL finding or exposed secret causes VIOLATION. "
+                 "Returns JSON with verdict (PASS | MODEL_BOUND | VIOLATION) and findings array with severity levels."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
              }, "required": ["claim"]}),
         Tool(name="veritas_adversary_gate",
              description=(
-                 "VERITAS Gate 9/10: ADVERSARY. Stress-tests the claim against an attack suite of transforms "
-                 "(bound inflation, evidence removal, parameter perturbation, uncertainty widening). For each attack, "
-                 "re-runs the full gate pipeline on the modified claim and checks if the verdict degrades. "
-                 "Fragility = fraction of attacks that degrade the verdict. Fragility > 25% returns MODEL_BOUND "
-                 "(ADVERSARY_FRAGILE). Any exploit that directly succeeds returns VIOLATION."
+                 "Gate 9/10: Stress-tests the claim against attack transforms (bound inflation, evidence removal, parameter/evidence perturbation). "
+                 "Use this as the final robustness check; fragility > 25% triggers MODEL_BOUND (ADVERSARY_FRAGILE). "
+                 "Returns JSON with verdict (PASS | MODEL_BOUND), fragility (float), attacks_tested (int), attacks_degraded (int)."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA
@@ -777,109 +761,95 @@ def _veritas_build_tools():
         # ── Full Pipeline ──
         Tool(name="veritas_run_pipeline",
              description=(
-                 "Run the full VERITAS Omega 10-gate deterministic pipeline in order: "
-                 "INTAKE -> TYPE -> DEPENDENCY -> EVIDENCE -> MATH -> COST -> INCENTIVE -> SECURITY -> ADVERSARY -> TRACE/SEAL. "
-                 "Use this tool to evaluate a complete BuildClaim end-to-end. "
-                 "Returns the final verdict (PASS, MODEL_BOUND, INCONCLUSIVE, or VIOLATION), all individual gate results "
-                 "with reason codes, and a tamper-proof SHA-256 seal hash for audit trail. "
-                 "When fail_fast is true (default), the pipeline halts immediately on the first VIOLATION, "
-                 "skipping remaining gates. Set fail_fast to false to collect all gate verdicts regardless of failures."
+                 "Runs the full 10-gate VERITAS pipeline: INTAKE → TYPE → DEPENDENCY → EVIDENCE → MATH → COST → INCENTIVE → SECURITY → ADVERSARY → TRACE/SEAL. "
+                 "Use this for complete end-to-end evaluation of a BuildClaim; use individual gates for targeted checks. "
+                 "Returns JSON with fields: final_verdict (PASS | MODEL_BOUND | INCONCLUSIVE | VIOLATION), gate_results (array), reason_codes (array), seal_hash (hex string)."
              ),
              inputSchema={"type": "object", "properties": {
                  "claim": CLAIM_SCHEMA,
                  "fail_fast": {
                      "type": "boolean",
                      "default": True,
-                     "description": "When true (default), halt the pipeline on the first VIOLATION verdict and skip remaining gates. Set to false to run all gates and collect every verdict."
+                     "description": "If true (default), halts on first VIOLATION. Set false to collect all gate verdicts."
                  },
              }, "required": ["claim"]}),
 
         # ── Evidence Utilities ──
         Tool(name="veritas_compute_quality",
              description=(
-                 "Compute the VERITAS Quality(e) score for a single evidence item. "
-                 "The score is calculated as clamp01(0.50 * provenance_score + 0.30 * uncertainty_score + 0.20 * method_score). "
-                 "Provenance score maps tier A=1.0, B=0.85, C=0.70, D=0.55, E=0.40. "
-                 "Method score considers protocol presence and repeatability. "
-                 "Uncertainty score penalizes high uncertainty relative to the measurement magnitude. "
-                 "Returns a float in [0.0, 1.0] where higher values indicate stronger evidence quality."
+                 "Computes the VERITAS Quality(e) score for a single evidence item using: clamp01(0.50*provenance + 0.30*uncertainty + 0.20*method). "
+                 "Use this to evaluate individual evidence quality before submitting to the evidence gate. "
+                 "Returns JSON with fields: quality (float 0.0-1.0)."
              ),
              inputSchema={"type": "object", "properties": {
                  "evidence_item": {
                      "type": "object",
-                     "description": "A single VERITAS evidence item containing at minimum: provenance (with tier and source_id), method (with protocol and repeatable flag), value (with x, units, and optional uncertainty), and timestamp."
+                     "description": "Evidence item with provenance (tier, source_id), method (protocol, repeatable), value (x, units, uncertainty), and timestamp."
                  },
                  "policy_env": {
                      "type": "object",
-                     "description": "Optional policy environment specification for environment-match scoring. Defaults to empty object if omitted.",
+                     "description": "Optional policy environment for match scoring. Defaults to empty.",
                      "default": {}
                  },
              }, "required": ["evidence_item"]}),
         Tool(name="veritas_mis_greedy",
              description=(
-                 "Run the MIS_GREEDY (Maximum Independent Set, greedy approximation) algorithm on a set of evidence items. "
-                 "Builds an independence graph where edges connect evidence items that share a source, chain, dependency, "
-                 "or same-protocol-within-24-hours. Then greedily selects the largest independent set (no two items share an edge). "
-                 "Returns the independent set, its count, total input count, and the pairwise agreement score. "
-                 "Use this to verify evidence independence before submitting to the evidence gate."
+                 "Runs the MIS_GREEDY algorithm to find the maximum independent set of evidence items with no shared source, chain, dependency, or same-protocol-within-24h. "
+                 "Use this to check evidence independence before submitting to the evidence gate; use veritas_compute_quality for individual quality scores. "
+                 "Returns JSON with fields: independent_set (array), independent_count (int), total_items (int), agreement (float 0.0-1.0)."
              ),
              inputSchema={"type": "object", "properties": {
                  "evidence_items": {
                      "type": "array",
                      "items": {"type": "object"},
-                     "description": "Array of VERITAS evidence items to analyze for independence. Each item should have id, variable, value, timestamp, method, provenance, and optional dependencies."
+                     "description": "Array of evidence items with id, variable, value, timestamp, method, provenance, and optional dependencies."
                  },
              }, "required": ["evidence_items"]}),
 
         # ── CLAEG ──
         Tool(name="veritas_claeg_resolve",
              description=(
-                 "CLAEG (Constrained Language & Evaluation Grammar) verdict resolver. Maps a VERITAS pipeline verdict "
-                 "to one of three terminal states: STABLE_CONTINUATION (PASS — system continues normally), "
-                 "ISOLATED_CONTAINMENT (MODEL_BOUND/INCONCLUSIVE — system operates with constraints), or "
-                 "TERMINAL_SHUTDOWN (VIOLATION — system must halt). No narrative framing is applied — "
-                 "the mapping is deterministic and absorbing (TERMINAL_SHUTDOWN cannot be reversed)."
+                 "Maps a VERITAS verdict to a CLAEG terminal state: PASS→STABLE_CONTINUATION, MODEL_BOUND/INCONCLUSIVE→ISOLATED_CONTAINMENT, VIOLATION→TERMINAL_SHUTDOWN. "
+                 "Use this after a pipeline run to determine the system's required operational state. "
+                 "Returns JSON with fields: verdict (string), terminal_state (string), invariant (string)."
              ),
              inputSchema={"type": "object", "properties": {
                  "verdict": {
                      "type": "string",
                      "enum": ["PASS", "MODEL_BOUND", "INCONCLUSIVE", "VIOLATION"],
-                     "description": "The VERITAS verdict to resolve into a CLAEG terminal state. Must be one of the four canonical verdict values."
+                     "description": "VERITAS verdict to resolve. Must be one of: PASS, MODEL_BOUND, INCONCLUSIVE, VIOLATION."
                  },
              }, "required": ["verdict"]}),
         Tool(name="veritas_claeg_transition",
              description=(
-                 "CLAEG state transition validator. Checks whether a transition from current_state to target_state "
-                 "is permitted under the CLAEG state machine rules. The absence of an explicitly allowed transition "
-                 "is treated as prohibition (closed-world assumption). "
-                 "Returns an object with 'allowed' (boolean) and 'reason' (string). "
-                 "Use this to validate system state changes before executing them."
+                 "Validates whether a CLAEG state transition is permitted under closed-world rules (absence of explicit permission = prohibition). "
+                 "Use this before changing system operational state; TERMINAL_SHUTDOWN is absorbing (no outbound transitions). "
+                 "Returns JSON with fields: allowed (boolean), reason (string)."
              ),
              inputSchema={"type": "object", "properties": {
                  "current_state": {
                      "type": "string",
-                     "description": "The current CLAEG state of the system, e.g. 'STABLE_CONTINUATION', 'ISOLATED_CONTAINMENT', or 'TERMINAL_SHUTDOWN'."
+                     "enum": ["STABLE_CONTINUATION", "ISOLATED_CONTAINMENT", "TERMINAL_SHUTDOWN"],
+                     "description": "Current CLAEG state of the system."
                  },
                  "target_state": {
                      "type": "string",
-                     "description": "The desired target CLAEG state to transition to. The validator checks if this transition is permitted."
+                     "enum": ["STABLE_CONTINUATION", "ISOLATED_CONTAINMENT", "TERMINAL_SHUTDOWN"],
+                     "description": "Desired target CLAEG state to transition to."
                  },
              }, "required": ["current_state", "target_state"]}),
 
         # ── NAFE Guardrails ──
         Tool(name="veritas_nafe_scan",
              description=(
-                 "NAFE (Narrative & Agency Elimination Framework) scanner for post-incident analysis. "
-                 "Scans the provided text for four categories of failure signatures that indicate narrative manipulation: "
-                 "Narrative Rescue (justifying failures with stories), Moral Override (ethical arguments bypassing gates), "
-                 "Authority Drift (appeals to authority or seniority), and Intent Inference (assuming good intentions instead of verifying). "
-                 "Returns clean status (boolean), list of detected flags, and scan metadata. "
-                 "Any detected NAFE violation is automatically sealed to the audit ledger."
+                 "Scans text for NAFE failure signatures: Narrative Rescue, Moral Override, Authority Drift, and Intent Inference. "
+                 "Use this on commit messages, PR descriptions, or incident reports to detect narrative bypasses of deterministic gates. "
+                 "Returns JSON with fields: clean (boolean), flags (array of detected signatures), scan_metadata (object). Violations auto-seal to the audit ledger."
              ),
              inputSchema={"type": "object", "properties": {
                  "text": {
                      "type": "string",
-                     "description": "The text content to scan for NAFE failure signatures. Can be a commit message, PR description, incident report, or any narrative text that might attempt to bypass deterministic gate verdicts."
+                     "description": "Text to scan for narrative failure signatures, e.g. a commit message or incident report."
                  },
              }, "required": ["text"]}),
     ]
@@ -993,239 +963,226 @@ if HAS_MCP:
         return [
             Tool(name="omega_preload_context",
                  description=(
-                     "Load episodic task context at the start of a new task or conversation. "
-                     "Retrieves relevant fragments from the provenance RAG store, recent vault sessions, "
-                     "any sealed cross-session handoff, and computes a VERITAS continuity score. "
-                     "Call this tool first when beginning work on a task to establish full situational awareness. "
-                     "Returns a context briefing with RAG matches, vault history, handoff data, and session continuity classification "
-                     "(CONTINUATION, CONTEXT_SWITCH, or FRESH_START)."
+                     "Loads episodic context for a new task by querying the RAG store, vault history, and any sealed handoff. "
+                     "Call this once at the start of every new task before doing any work. "
+                     "Returns JSON with fields: rag_matches, vault_history, handoff, continuity_type (CONTINUATION | CONTEXT_SWITCH | FRESH_START)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "task": {
                          "type": "string",
-                         "description": "A natural-language description of the task you are starting. This is used to query the RAG store for relevant prior knowledge and to classify context continuity."
+                         "description": "Natural-language description of the task to load context for, e.g. 'Fix authentication bug in login module'."
                      }
                  }, "required": ["task"]}),
             Tool(name="omega_rag_query",
                  description=(
-                     "Perform semantic search across the local provenance RAG store. "
-                     "Returns ranked text fragments sorted by cosine similarity, each with a VERITAS quality score "
-                     "based on provenance tier, method repeatability, and freshness. "
-                     "Use this to find prior knowledge, decisions, or evidence fragments relevant to your current task."
+                     "Searches the provenance RAG store using semantic similarity and returns ranked text fragments. "
+                     "Use this for meaning-based search; use omega_vault_search instead for exact keyword matching. "
+                     "Returns JSON array of {fragment, similarity_score, quality_score, source, tier}."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "query": {
                          "type": "string",
-                         "description": "Natural-language search query to match against stored knowledge fragments using semantic similarity."
+                         "description": "Natural-language search query, e.g. 'How was the authentication module designed?'."
                      },
                      "top_k": {
                          "type": "integer",
                          "default": 5,
-                         "description": "Maximum number of ranked results to return. Higher values return more matches but may include lower-relevance fragments."
+                         "description": "Maximum number of results to return, between 1 and 50."
                      }
                  }, "required": ["query"]}),
             Tool(name="omega_ingest",
                  description=(
-                     "Ingest a new text fragment into the provenance RAG store for future retrieval. "
-                     "Use this to teach the brain new knowledge — decisions, findings, code patterns, or any information "
-                     "that should persist across sessions. Each fragment is stored with provenance metadata (source and evidence tier) "
-                     "and becomes searchable via omega_rag_query. "
-                     "Returns the fragment ID and storage confirmation."
+                     "Stores a new knowledge fragment in the provenance RAG store with source and evidence tier metadata. "
+                     "Use this to persist decisions, patterns, or findings for future retrieval via omega_rag_query. "
+                     "Returns JSON with fields: fragment_id, stored (boolean), timestamp."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "content": {
                          "type": "string",
-                         "description": "The text content to ingest into the RAG store. Can be any knowledge fragment: a decision rationale, code pattern, finding, or reference material."
+                         "description": "Text content to store, e.g. 'Switched from Poetry to setuptools for pyproject.toml compatibility'."
                      },
                      "source": {
                          "type": "string",
-                         "description": "Identifier for the origin of this knowledge, e.g. 'user-session', 'code-review', 'documentation'. Used for provenance tracking and dominance analysis."
+                         "description": "Origin identifier for provenance tracking, e.g. 'code-review', 'user-session', 'documentation'."
                      },
                      "tier": {
                          "type": "string",
-                         "description": "VERITAS evidence tier rating. A = highest confidence (verified, reproducible), B = high (reliable source), C = moderate (single source), D = low (unverified). Affects Quality(e) scoring.",
+                         "description": "Evidence confidence tier: A (verified/reproducible), B (reliable), C (single source), D (unverified).",
                          "default": "B",
                          "enum": ["A", "B", "C", "D"]
                      }
                  }, "required": ["content"]}),
             Tool(name="omega_vault_search",
                  description=(
-                     "Perform full-text keyword search across the local vault database. "
-                     "Unlike omega_rag_query (semantic similarity), this performs exact keyword matching against "
-                     "session logs, entries, and stored data using SQLite FTS5. "
-                     "Use this when you need precise keyword matches rather than semantic relevance. "
-                     "Returns matching vault entries with timestamps and context."
+                     "Searches the vault database using exact keyword matching via SQLite FTS5. "
+                     "Use this for precise keyword lookups; use omega_rag_query instead for semantic/meaning-based search. "
+                     "Returns JSON array of matching vault entries with timestamps and session context."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "query": {
                          "type": "string",
-                         "description": "Keyword search query for full-text search. Supports SQLite FTS5 syntax: AND, OR, NOT, phrase matching with double quotes."
+                         "description": "FTS5 keyword query supporting AND, OR, NOT, and quoted phrases, e.g. '\"deploy production\" NOT staging'."
                      }
                  }, "required": ["query"]}),
             Tool(name="omega_cortex_check",
                  description=(
-                     "Tri-Node Cortex approval gate. Computes semantic similarity between a proposed tool invocation "
-                     "and the declared task baseline to detect intent drift. Returns an approval decision (approved/blocked) "
-                     "and the similarity score. Use this before high-impact or irreversible operations to verify alignment "
-                     "with the current task. Similarity below 0.45 (STEER_FLOOR) results in a hard block per NAEF invariant."
+                     "Read-only alignment gate that measures semantic similarity between a proposed action and the task baseline. "
+                     "Use this to check alignment before high-impact operations without modifying any arguments; "
+                     "use omega_cortex_steer instead if you want automatic argument correction. "
+                     "Returns JSON with fields: approved (boolean), similarity (float 0-1), verdict (APPROVED | BLOCKED)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "tool": {
                          "type": "string",
-                         "description": "The name of the tool being checked for alignment, e.g. 'omega_ingest' or 'veritas_run_pipeline'."
+                         "description": "Name of the tool to check alignment for, e.g. 'omega_ingest'."
                      },
                      "args": {
                          "type": "object",
-                         "description": "The arguments that will be passed to the tool. These are serialized and compared against the baseline for drift detection."
+                         "description": "The proposed arguments for the tool call, serialized as a JSON object."
                      },
                      "baseline_prompt": {
                          "type": "string",
-                         "description": "The declared task baseline describing the intended operation. The Cortex measures semantic distance between this baseline and the tool+args to detect drift."
+                         "description": "Task baseline describing the intended operation, e.g. 'Refactoring the auth module for OAuth2 support'."
                      }
                  }, "required": ["tool", "args", "baseline_prompt"]}),
             Tool(name="omega_cortex_steer",
                  description=(
-                     "Cortex correction mode for drifting tool arguments. When a tool invocation's similarity to the "
-                     "task baseline falls in the steering range (0.45–0.65), this tool attempts to correct the arguments "
-                     "back toward alignment rather than blocking outright. Below 0.45 similarity, a hard block is enforced "
-                     "(NAEF invariant — no narrative override). Returns steered arguments, similarity score, and correction details."
+                     "Alignment gate with automatic argument correction for drifting tool calls. "
+                     "Use this instead of omega_cortex_check when you want arguments auto-corrected toward the baseline; "
+                     "blocks hard if similarity < 0.45, steers if 0.45-0.65, passes unchanged if > 0.65. "
+                     "Returns JSON with fields: similarity (float), steered_args (object), corrections (array), verdict (PASSED | STEERED | BLOCKED)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "tool": {
                          "type": "string",
-                         "description": "The name of the tool whose arguments need steering, e.g. 'omega_ingest' or 'omega_seal_run'."
+                         "description": "Name of the tool whose arguments may need correction, e.g. 'omega_seal_run'."
                      },
                      "args": {
                          "type": "object",
-                         "description": "The original tool arguments that may be drifting from the baseline. These will be corrected if within steering range."
+                         "description": "The original arguments that may be drifting from baseline. Will be corrected if in the steering range."
                      },
                      "baseline_prompt": {
                          "type": "string",
-                         "description": "The task baseline that defines the intended direction. Arguments are steered toward alignment with this baseline."
+                         "description": "Task baseline to steer toward, e.g. 'Deploying hotfix to staging environment'."
                      }
                  }, "required": ["tool", "args", "baseline_prompt"]}),
             Tool(name="omega_seal_run",
                  description=(
-                     "Append a tamper-proof entry to the S.E.A.L. (Secure Evidence Audit Ledger) hash chain. "
-                     "Each entry is linked to the previous via SHA-256, creating an immutable audit trail. "
-                     "Use this to record significant events, decisions, or state changes that must be verifiable. "
-                     "Returns the seal hash, chain position, and timestamp."
+                     "Appends a tamper-proof entry to the SEAL (Secure Evidence Audit Ledger) SHA-256 hash chain. "
+                     "Use this to create an immutable audit record of significant events, decisions, or state changes. "
+                     "Returns JSON with fields: seal_hash (hex string), chain_position (integer), timestamp (ISO 8601)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "context": {
                          "type": "object",
-                         "description": "Structured metadata for the seal entry. Should contain key-value pairs describing the event being recorded, e.g. {'action': 'deploy', 'target': 'production', 'version': '2.1.0'}."
+                         "description": "Structured event metadata, e.g. {\"action\": \"deploy\", \"target\": \"production\", \"version\": \"2.1.0\"}."
                      },
                      "response": {
                          "type": "string",
-                         "description": "The response or outcome text to seal into the audit ledger. This becomes part of the immutable hash chain."
+                         "description": "Outcome text to seal into the immutable ledger, e.g. 'Deployment succeeded with zero errors'."
                      }
                  }, "required": ["context", "response"]}),
             Tool(name="omega_log_session",
                  description=(
-                     "Write a complete session record to the local vault for cross-session persistence. "
-                     "Records the task description, key decisions made, and files modified during the session. "
-                     "This data is retrievable via omega_vault_search and omega_preload_context in future sessions. "
-                     "Returns the stored session ID and write confirmation."
+                     "Writes a complete session record to the vault for cross-session persistence. "
+                     "Use this at the end of a work session to record what was done; data is retrievable via omega_vault_search. "
+                     "Returns JSON with fields: session_id, stored (boolean), entry_count (integer)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "session_id": {
                          "type": "string",
-                         "description": "Optional unique identifier for this session. If omitted, the current server session ID is used."
+                         "description": "Unique session identifier. Auto-generated if omitted."
                      },
                      "task": {
                          "type": "string",
-                         "description": "Natural-language description of the task completed during this session."
+                         "description": "Description of the task completed, e.g. 'Migrated database schema to v3'."
                      },
                      "decisions": {
                          "type": "array",
                          "items": {"type": "string"},
-                         "description": "List of key decisions made during the session, e.g. ['Used setuptools over poetry', 'Pinned dependency to v3.2.1']."
+                         "description": "Key decisions made, e.g. ['Used Alembic for migrations', 'Kept backward compatibility']."
                      },
                      "files_modified": {
                          "type": "array",
                          "items": {"type": "string"},
-                         "description": "List of file paths that were created or modified during the session, e.g. ['src/main.py', 'pyproject.toml']."
+                         "description": "File paths changed, e.g. ['src/models.py', 'alembic/versions/001.py']."
                      }
                  }, "required": ["task"]}),
             Tool(name="omega_write_handoff",
                  description=(
-                     "Write a SHA-256 sealed cross-session handoff document. This handoff is automatically loaded "
-                     "via omega://session/preload on the next server restart, providing seamless context continuity. "
-                     "Use at the end of a session to preserve critical state for the next session. "
-                     "Returns the handoff hash and file path."
+                     "Creates a SHA-256 sealed handoff document that auto-loads on the next server restart via omega://session/preload. "
+                     "Use this at the end of a session to ensure seamless context continuity for the next session. "
+                     "Returns JSON with fields: handoff_hash (hex string), file_path (string)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "task": {
                          "type": "string",
-                         "description": "The task that was being worked on, used as the handoff title."
+                         "description": "Task title for the handoff, e.g. 'OAuth2 migration phase 2'."
                      },
                      "summary": {
                          "type": "string",
-                         "description": "Concise summary of what was accomplished and the current state. This is the primary context the next session will receive."
+                         "description": "Concise summary of progress and current state for the next session."
                      },
                      "decisions": {
                          "type": "array",
                          "items": {"type": "string"},
-                         "description": "Key architectural or implementation decisions that the next session should be aware of."
+                         "description": "Key decisions the next session should know about."
                      },
                      "files_modified": {
                          "type": "array",
                          "items": {"type": "string"},
-                         "description": "Files that were changed during this session, so the next session knows what to review."
+                         "description": "Files changed during this session."
                      },
                      "next_steps": {
                          "type": "array",
                          "items": {"type": "string"},
-                         "description": "Ordered list of recommended next actions for the continuation session."
+                         "description": "Ordered list of recommended next actions."
                      },
                      "conversation_id": {
                          "type": "string",
-                         "description": "Optional conversation identifier for cross-referencing with external conversation tracking systems."
+                         "description": "Optional external conversation tracking ID."
                      }
                  }, "required": ["task", "summary"]}),
             Tool(name="omega_execute",
                  description=(
-                     "Cortex-wrapped meta-execution tool. The recommended default execution path for all Omega Brain tool calls. "
-                     "Pass any Omega Brain tool name and its arguments — the Cortex automatically checks alignment with "
-                     "the task baseline, steers drifting arguments if needed, executes the tool, and logs the result to the "
-                     "SEAL audit chain. This makes Cortex governance the default rather than an optional check. "
-                     "Returns the execution result, Cortex verdict, and SEAL hash."
+                     "Cortex-governed execution wrapper that checks alignment, steers if needed, executes, and auto-logs to the SEAL chain. "
+                     "Use this as the default way to invoke any Omega Brain tool with full governance; "
+                     "only wraps Omega Brain tools — external tools are returned with steered_args for manual invocation. "
+                     "Returns JSON with fields: result (object), cortex_verdict (string), seal_hash (hex string)."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "tool": {
                          "type": "string",
-                         "description": "The name of the Omega Brain tool to execute, e.g. 'omega_ingest', 'omega_rag_query', 'omega_seal_run'. Only Omega Brain tools can be dispatched through this wrapper."
+                         "description": "Omega Brain tool name to execute, e.g. 'omega_ingest', 'omega_rag_query', 'omega_seal_run'."
                      },
                      "args": {
                          "type": "object",
-                         "description": "The arguments to pass to the target tool. These may be steered by the Cortex if they drift from the baseline."
+                         "description": "Arguments for the target tool. May be steered by the Cortex before execution."
                      },
                      "baseline": {
                          "type": "string",
-                         "description": "Task baseline description for the Cortex alignment check. The Cortex measures semantic distance between this baseline and the tool+args."
+                         "description": "Task baseline for the Cortex alignment check, e.g. 'Ingesting code review findings'."
                      }
                  }, "required": ["tool", "args", "baseline"]}),
             Tool(name="omega_brain_report",
                  description=(
-                     "Generate a human-readable session audit report. Displays the SEAL chain tail (recent audit entries), "
-                     "VERITAS quality scores, Cortex verdicts (blocked, approved, or steered), vault statistics, "
-                     "and session health metrics. Use this to make the trust and governance layer visible and inspectable. "
-                     "Returns a formatted text report suitable for display or logging."
+                     "Generates a human-readable audit report showing SEAL chain entries, Cortex verdicts, and vault statistics. "
+                     "Use this to inspect the trust and governance layer; use omega_brain_status for a quick health summary instead. "
+                     "Returns formatted text report with sections: seal_tail, cortex_verdicts, vault_stats, session_health."
                  ),
                  inputSchema={"type": "object", "properties": {
                      "lines": {
                          "type": "integer",
-                         "description": "Number of recent SEAL ledger entries to include in the report. Higher values show more audit history.",
+                         "description": "Number of recent SEAL ledger entries to include, between 1 and 100.",
                          "default": 10
                      }
                  }}),
             Tool(name="omega_brain_status",
                  description=(
-                     "Retrieve unified brain health metrics. Returns vault statistics (total sessions, entries, "
-                     "database size), RAG fragment count, SEAL ledger entry count, current session ID, "
-                     "server uptime, and call counter. Use this for a quick health check of the Omega Brain "
-                     "subsystems without generating a full audit report."
+                     "Returns a quick health summary of all Omega Brain subsystems as structured JSON. "
+                     "Use this for a fast status check; use omega_brain_report for a detailed audit report instead. "
+                     "Returns JSON with fields: vault_sessions (int), vault_entries (int), rag_fragments (int), "
+                     "seal_entries (int), session_id (string), uptime_seconds (float), call_count (int)."
                  ),
                  inputSchema={"type": "object", "properties": {}}),
         ] + (_veritas_build_tools() if HAS_BUILD_GATES else [])
