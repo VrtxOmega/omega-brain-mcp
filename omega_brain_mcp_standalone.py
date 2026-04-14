@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
+# ── Venv auto-activation shim ──────────────────────────────────
+# If running from system Python but uv installed deps into .venv,
+# re-exec with the venv Python so imports resolve correctly.
+import os as _os, sys as _sys
+if not _sys.prefix != _sys.base_prefix:  # not already in a venv
+    _venv_py = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv",
+                             "Scripts" if _sys.platform == "win32" else "bin", "python")
+    if _os.path.isfile(_venv_py):
+        _os.execv(_venv_py, [_venv_py] + _sys.argv)
+del _os, _sys
+# ── End shim ───────────────────────────────────────────────────
 """
 Omega Brain MCP + VERITAS Build Gates — Standalone Edition v2.1.0
 ==========================================
