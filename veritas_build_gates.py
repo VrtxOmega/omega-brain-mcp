@@ -765,14 +765,23 @@ def math_gate(claim: dict) -> dict:
     boundaries = claim.get("boundaries", [])
 
     # Build variable bindings from evidence
-    bindings: dict[str, float] = {}
+    collected: dict[str, list[float]] = {}
     for e in evidence_items:
         var = e.get("variable", "")
         v = e.get("value", {})
+        val = None
         if isinstance(v, dict) and "x" in v:
-            bindings[var] = float(v["x"])
+            val = float(v["x"])
         elif isinstance(v, (int, float)):
-            bindings[var] = float(v)
+            val = float(v)
+            
+        if var and val is not None:
+            collected.setdefault(var, []).append(val)
+
+    # Aggregate to mean per variable
+    bindings: dict[str, float] = {
+        k: sum(v) / len(v) for k, v in collected.items()
+    }
 
     for boundary in boundaries:
         constraint = boundary.get("constraint", {})
@@ -813,6 +822,16 @@ def _evaluate_constraint(constraint: dict, bindings: dict[str, float]) -> Option
     """
     if not constraint:
         return True
+
+    # Normalize shorthand format {variable, operator, target}
+    # to canonical format {op, left, right}
+    if "variable" in constraint and "operator" in constraint:
+        constraint = {
+            "op": constraint["operator"],
+            "left": constraint["variable"],
+            "right": constraint.get("target")
+        }
+
     op = constraint.get("op", "")
 
     if op in ("and", "AND"):

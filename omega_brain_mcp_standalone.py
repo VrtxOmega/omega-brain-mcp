@@ -13,7 +13,7 @@ if not _sys.prefix != _sys.base_prefix:  # not already in a venv
 del _os, _sys
 # ── End shim ───────────────────────────────────────────────────
 """
-Omega Brain MCP + VERITAS Build Gates — Standalone Edition v2.1.0
+Omega Brain MCP + VERITAS Build Gates — Standalone Edition v2.1.1
 ==========================================
 A fully self-contained MCP server with built-in:
   - Provenance layer (RAG, fragment ingestion, VERITAS scoring)
@@ -1704,7 +1704,7 @@ async def main():
     parser.add_argument("--port", type=int, default=8055, help="Port for SSE server (default 8055)")
     args, unknown = parser.parse_known_args()
 
-    log.info(f"[omega-brain] Standalone v2.1.0 + Build Gates | session={_SESSION_ID} | data={DATA_DIR}")
+    log.info(f"[omega-brain] Standalone v2.1.1 + Build Gates | session={_SESSION_ID} | data={DATA_DIR}")
     
     if args.sse:
         log.info(f"[omega-brain] Starting SSE Server on port {args.port}")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omega-brain-mcp"
-version = "2.1.0"
+version = "2.1.1"
 description = "Cross-session episodic memory + 10-gate VERITAS Build pipeline for AI agents — provenance, Cortex, S.E.A.L. ledger, CLAEG, NAFE, zero-config"
 readme = "README.md"
 license = { text = "MIT" }

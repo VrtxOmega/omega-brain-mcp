@@ -6,7 +6,7 @@
 </div>
 
 ![Status](https://img.shields.io/badge/Status-ACTIVE-success?style=for-the-badge&labelColor=000000&color=d4af37)
-![Version](https://img.shields.io/badge/Version-v2.1.0-blue?style=for-the-badge&labelColor=000000)
+![Version](https://img.shields.io/badge/Version-v2.1.1-blue?style=for-the-badge&labelColor=000000)
 ![Stack](https://img.shields.io/badge/Stack-Python%20%2B%20MCP-informational?style=for-the-badge&labelColor=000000)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge&labelColor=000000)
 

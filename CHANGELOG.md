@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.1 — 2026-04-14
+
+### Changed
+- Patched `_evaluate_constraint` to correctly normalize tracking logic formats (`{"variable": ..., "operator": ..., "target": ...}`) into the strict canonical schema (`{"op": ..., "left": ..., "right": ...}`).
+- Prevents `UNSAT_CONSTRAINT` failure caused by shorthand mismatch formatting in the TYPE gate.
+
 ## v2.1.0 — 2026-04-09
 
 **VERITAS Omega Build Gates — 10-gate deterministic build pipeline.**
