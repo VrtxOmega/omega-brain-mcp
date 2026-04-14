@@ -10,6 +10,8 @@
 ![Stack](https://img.shields.io/badge/Stack-Python%20%2B%20MCP-informational?style=for-the-badge&labelColor=000000)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge&labelColor=000000)
 
+[![omega-brain-mcp MCP server](https://glama.ai/mcp/servers/VrtxOmega/omega-brain-mcp/badges/card.svg)](https://glama.ai/mcp/servers/VrtxOmega/omega-brain-mcp)
+
 ---
 
 A self-contained MCP server that gives AI agents verifiable provenance, cross-session memory, a cryptographic audit trail, and a **10-gate deterministic build evaluation pipeline**. No external server required.
