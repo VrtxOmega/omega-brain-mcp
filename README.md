@@ -1,8 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/VrtxOmega/Gravity-Omega/master/omega_icon.png" width="120" alt="VERITAS Omega" />
-  <h1>OMEGA BRAIN MCP + VERITAS BUILD GATES</h1>
-  <p><strong>Standalone Model Context Protocol Server with Built-In Intelligence + Deterministic Build Pipeline</strong></p>
-  <p><em>Two files. One dependency. Full sovereign cognition + 10-gate build verification.</em></p>
+  <h1>OMEGA BRAIN MCP</h1>
+  <p><strong>Governance-First MCP Server — VERITAS Gates · Cryptographic Audit Ledger · Cortex Approval Pipeline</strong></p>
 </div>
 
 <div align="center">
@@ -19,7 +18,9 @@
 
 ---
 
-A **self-contained MCP server** that equips AI agents with verifiable provenance, cross-session episodic memory, a cryptographic audit trail, and a **10-gate deterministic build evaluation pipeline** — all in two Python files with a single pip dependency.
+## Ecosystem Canon
+
+Omega Brain MCP is the governing cognitive substrate of the **VERITAS & Sovereign Ecosystem (Omega Universe)**. Where other memory layers persist context, Omega Brain enforces it: every execution path passes through the Cortex approval gate, every state transition is sealed to a tamper-proof SHA-3-256 audit ledger, and every artifact claim must survive a 10-gate deterministic build pipeline before a verdict is issued. It does not make trust decisions on behalf of the operator — it enforces the constraints the operator has declared, cryptographically and without exception. In the Omega Universe, Omega Brain MCP is the control plane: the point where agent autonomy ends and declared policy begins.
 
 > **SYSTEM INVARIANT:** VERITAS Build does not determine whether code is 'good.' VERITAS Build determines whether code survives disciplined attempts to break it under explicitly declared primitives, constraints, test regimes, boundaries, cost models, evidence, and policy.
 
@@ -34,48 +35,127 @@ A **self-contained MCP server** that equips AI agents with verifiable provenance
 - [Installation](#installation)
 - [Quickstart](#quickstart)
 - [Configuration](#configuration)
+- [Integrations](#integrations)
 - [Usage Examples](#usage-examples)
 - [Tools Reference](#tools-reference-26-tools)
 - [Resources](#resources-9)
 - [CLAEG State Machine](#claeg-state-machine)
 - [Troubleshooting](#troubleshooting)
-- [Security & Privacy](#security--privacy)
+- [Security & Sovereignty](#security--sovereignty)
+- [Threat Model](#threat-model)
+- [Roadmap](#roadmap)
+- [Omega Universe](#omega-universe)
 - [License](#license)
 
 ---
 
 ## Overview
 
-Omega Brain MCP is the cognitive layer of the **VERITAS Omega** ecosystem. It runs as a local MCP server process — no cloud, no API keys, no external server required — and exposes 26 tools and 9 resources to any MCP-compatible AI client (Claude Desktop, VS Code Copilot, Cursor, Windsurf, AutoGen, LangChain, CrewAI, LlamaIndex, and more).
+### What It Is
 
-**Brain Core** provides cross-session episodic memory via a local SQLite vault, a semantic RAG provenance store with a 3-tier embedding engine, a Tri-Node Cortex approval gate, and a SHA-3 tamper-proof S.E.A.L. audit ledger. **VERITAS Build Gates** adds a 10-gate deterministic pipeline that evaluates any AI-generated artifact against explicitly declared primitives, evidence, constraints, cost models, security rules, and adversarial scenarios — returning a cryptographically sealed verdict.
+Omega Brain MCP is a self-contained **Model Context Protocol (MCP) server** that runs as a local process alongside any MCP-compatible AI client. It exposes 26 tools and 9 resources covering four governance domains:
+
+- **Cross-session episodic memory** — SQLite vault with full-text search, persisted across all restarts
+- **10-gate VERITAS build pipeline** — deterministic artifact evaluation from INTAKE through TRACE/SEAL
+- **Cryptographic S.E.A.L. audit ledger** — append-only SHA-3-256 hash chain; every operation is sealed
+- **Cortex approval gate** — Tri-Node similarity gate that enforces declared baseline policy on every tool call
+
+Two Python files. One pip dependency. Zero external services.
+
+Compatible clients: Claude Desktop, VS Code Copilot, Cursor, Windsurf, AutoGen, LangChain, CrewAI, LlamaIndex, and any MCP-compliant host.
+
+### What It Is Not
+
+- **Not a cloud service.** No network egress, no API keys, no telemetry. All data remains on the operator's machine under `~/.omega-brain/` (or `OMEGA_BRAIN_DATA_DIR`).
+- **Not a language model.** Omega Brain does not generate text. It governs, routes, stores, and audits agent operations.
+- **Not a policy authority.** VERITAS gates enforce what the operator declares. The system cannot determine correctness beyond what its evidence and constraints describe.
+- **Not a firewall or OS-level isolation layer.** See the [Threat Model](#threat-model) for explicit out-of-scope boundaries.
 
 ---
 
 ## Features
 
-- **Zero-config cross-session memory** — vault (SQLite + FTS5) persists sessions, entries, and events across restarts; auto-loaded at startup via `omega://session/preload`
-- **Semantic RAG provenance** — 3-tier embedding engine: `sentence-transformers` → `fastembed` ONNX → TF-IDF n-gram (always works, no GPU required)
-- **Cryptographic S.E.A.L. ledger** — append-only SHA-3 256 hash chain; every cortex check, ingest, session log, and execution is automatically sealed
-- **Cortex approval gate** — Tri-Node similarity gate with hard-block (`< 0.45`) and steer (`0.45–0.65`) windows; blocks NAFE drift before execution
+### Cross-Session Episodic Memory
+
+- **Vault (SQLite + FTS5)** — sessions, entries, and events persist across restarts; auto-loaded at startup via `omega://session/preload`
+- **Semantic RAG provenance** — 3-tier embedding engine: `sentence-transformers` → `fastembed` ONNX → TF-IDF n-gram; always available with no GPU requirement
 - **Sealed handoff** — SHA-256 signed cross-session memory file; auto-loaded on restart, auto-written on task seal
-- **10-gate VERITAS build pipeline** — INTAKE → TYPE → DEPENDENCY → EVIDENCE → MATH → COST → INCENTIVE → SECURITY → ADVERSARY → TRACE/SEAL; fail-fast on VIOLATION
-- **CLAEG state machine** — Constraint-locked 3-state machine (STABLE\_CONTINUATION, ISOLATED\_CONTAINMENT, TERMINAL\_SHUTDOWN); absence of allowed transition = prohibition
-- **NAFE guardrails** — Detects and seals narrative rescue, moral override, authority drift, and intent inference in AI output
+
+### 10-Gate VERITAS Build Pipeline
+
+Full deterministic evaluation pipeline: **INTAKE → TYPE → DEPENDENCY → EVIDENCE → MATH → COST → INCENTIVE → SECURITY → ADVERSARY → TRACE/SEAL**
+
+Every gate returns a structured verdict (`PASS`, `MODEL_BOUND`, `INCONCLUSIVE`, or `VIOLATION`). The pipeline seals the final result as a cryptographically identified record. Fail-fast on `VIOLATION` by default.
+
+### Cryptographic Audit Ledger (S.E.A.L.)
+
+- Append-only SHA-3-256 hash chain
+- Every Cortex check, ingest, session log, gate run, and execution is automatically sealed
+- Chain integrity is verifiable at any point; any tampered entry breaks the chain
+- Persisted to `omega_ledger.json` under the data directory
+
+### Cortex Approval Gate
+
+- **Tri-Node similarity gate** evaluates every tool call against the operator-declared baseline prompt
+- Hard-block window `< 0.45` — execution is refused; event sealed to ledger
+- Steer window `0.45–0.65` — arguments are corrected toward baseline alignment before execution
+- Blocks NAFE drift (narrative rescue, moral override, authority drift, intent inference) before execution
+- **CLAEG state machine** governs terminal states: `STABLE_CONTINUATION`, `ISOLATED_CONTAINMENT`, `TERMINAL_SHUTDOWN`; absence of allowed transition is prohibition
+
+### Operational Characteristics
+
 - **Two transports** — stdio (default, MCP standard) and SSE (HTTP streaming for web clients)
 - **Docker-ready** — single `Dockerfile`, non-root user, unbuffered I/O
-- **Single dependency** — `mcp>=1.0.0`; optional `fastembed` or `sentence-transformers` for better embeddings
+- **Single dependency** — `mcp>=1.0.0`; optional `fastembed` or `sentence-transformers` for higher-quality embeddings
+- **Fully local** — no cloud, no API keys, no external server required
 
 ---
 
 ## Architecture
 
-### Component Map
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        MCP CLIENT                               │
+│   (Claude Desktop / VS Code Copilot / Cursor / AutoGen / ...)   │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │  MCP stdio / SSE (JSON-RPC 2.0)
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   OMEGA BRAIN MCP SERVER                        │
+│               omega_brain_mcp_standalone.py                     │
+│                                                                 │
+│  ┌──────────────────────────┐  ┌──────────────────────────────┐ │
+│  │       BRAIN CORE         │  │      VERITAS BUILD GATES     │ │
+│  │                          │  │                              │ │
+│  │  Cortex Approval Gate    │  │  10-Gate Pipeline            │ │
+│  │  (Tri-Node, steer/block) │  │  INTAKE → TYPE → DEPENDENCY  │ │
+│  │                          │  │  → EVIDENCE → MATH → COST    │ │
+│  │  RAG Provenance Store    │  │  → INCENTIVE → SECURITY      │ │
+│  │  (3-tier embeddings)     │  │  → ADVERSARY → TRACE/SEAL    │ │
+│  │                          │  │                              │ │
+│  │  S.E.A.L. Audit Ledger   │  │  Evidence Engine             │ │
+│  │  (SHA-3-256 hash chain)  │  │  (Quality(e), MIS_GREEDY)    │ │
+│  │                          │  │                              │ │
+│  │  Sealed Handoff          │  │  CLAEG State Machine         │ │
+│  │  (SHA-256 cross-session) │  │  NAFE Scanner                │ │
+│  └──────────┬───────────────┘  └────────────────┬─────────────┘ │
+└─────────────│──────────────────────────────────│───────────────┘
+              │                                  │
+              ▼  SQLite                          ▼  Pure Python
+    ┌─────────────────────┐           ┌─────────────────────────┐
+    │   ~/.omega-brain/   │           │  veritas_build_gates.py │
+    │   omega_vault.db    │           │  (stateless, no I/O,    │
+    │   omega_ledger.json │           │   reproducible verdicts)│
+    │   omega_handoff.json│           └─────────────────────────┘
+    └─────────────────────┘
+```
+
+### Component Roles
 
 | Layer | Component | Role |
 |-------|-----------|------|
 | **Brain Core** | Vault (SQLite) | Persistent session/entry storage with FTS5 full-text search |
-| **Brain Core** | SEAL Ledger | Append-only SHA3-256 hash chain for tamper-proof audit |
+| **Brain Core** | S.E.A.L. Ledger | Append-only SHA-3-256 hash chain for tamper-proof audit |
 | **Brain Core** | RAG Provenance | Semantic embedding store — 3-tier engine (ST / fastembed / TF-IDF) |
 | **Brain Core** | Cortex | Tri-Node approval gate with steer/block modes |
 | **Brain Core** | Handoff | SHA-256 sealed cross-session memory transfer |
@@ -83,32 +163,6 @@ Omega Brain MCP is the cognitive layer of the **VERITAS Omega** ecosystem. It ru
 | **Build Gates** | Evidence Engine | Quality(e) formula, MIS\_GREEDY independence scoring, Agreement computation |
 | **Build Gates** | CLAEG | Constraint-locked state machine with 3 terminal states |
 | **Build Gates** | NAFE Scanner | Narrative failure signature detection and auto-seal |
-
-### Request Flow
-
-```
-AI Client (Claude / VS Code / Cursor / AutoGen / ...)
-    │
-    │  MCP stdio / SSE
-    ▼
-┌─────────────────────────────────────┐
-│         omega_brain_mcp_standalone  │
-│  ┌────────────┐  ┌────────────────┐ │
-│  │  Brain Core│  │  VERITAS Gates │ │
-│  │  ──────────│  │  ──────────────│ │
-│  │  Cortex    │  │  10-Gate       │ │
-│  │  RAG/Vault │  │  Pipeline      │ │
-│  │  S.E.A.L.  │  │  CLAEG/NAFE    │ │
-│  │  Handoff   │  │  Evidence Eng. │ │
-│  └─────┬──────┘  └───────┬────────┘ │
-└────────│─────────────────│──────────┘
-         │  SQLite          │  Pure Python
-         ▼                  ▼
-    ~/.omega-brain/    veritas_build_gates.py
-    omega_vault.db     (deterministic, stateless)
-    omega_ledger.json
-    omega_handoff.json
-```
 
 ### Verdict System
 
@@ -132,13 +186,13 @@ AI Client (Claude / VS Code / Cursor / AutoGen / ...)
 | Optional | `fastembed >= 0.2.0` — ONNX embeddings, ~30 MB model cache, no GPU |
 | Optional | `sentence-transformers >= 2.0.0` + `numpy` — highest quality embeddings, GPU-capable |
 
-> **Embedding engine auto-selection:** The server probes for `sentence-transformers` first, then `fastembed`, then falls back to built-in TF-IDF n-gram. You always get semantic search — richer models just improve recall quality.
+> **Embedding engine auto-selection:** The server probes for `sentence-transformers` first, then `fastembed`, then falls back to built-in TF-IDF n-gram. You always get semantic search — richer models improve recall quality.
 
 ---
 
 ## Installation
 
-### From PyPI (when published)
+### From PyPI
 
 ```bash
 pip install omega-brain-mcp
@@ -159,8 +213,8 @@ pip install sentence-transformers numpy     # best quality, larger download
 
 ```bash
 docker build -t omega-brain-mcp .
-docker run --rm -i omega-brain-mcp          # stdio mode (MCP standard)
-docker run --rm -p 8055:8055 omega-brain-mcp --sse --port 8055   # SSE mode
+docker run --rm -i omega-brain-mcp                              # stdio mode (MCP standard)
+docker run --rm -p 8055:8055 omega-brain-mcp --sse --port 8055  # SSE mode
 ```
 
 ### Run Tests
@@ -196,14 +250,14 @@ python omega_brain_mcp_standalone.py --sse --port 8055
 # POST http://localhost:8055/messages — send tool calls
 ```
 
-### 4 — Configure your client (see [Configuration](#configuration))
-
-### 5 — Test a tool call manually (stdio)
+### 4 — Test a tool call manually (stdio)
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"omega_brain_status","arguments":{}}}' \
   | python omega_brain_mcp_standalone.py
 ```
+
+### 5 — Configure your MCP client (see [Configuration](#configuration))
 
 ---
 
@@ -292,13 +346,59 @@ In `~/.codeium/windsurf/mcp_config.json`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PYTHONUTF8` | `0` | Set to `1` on Windows to avoid encoding errors |
-| `OMEGA_BRAIN_DATA_DIR` | `~/.omega-brain/` | Override data directory for vault, ledger, and handoff files |
+| `OMEGA_BRAIN_DATA_DIR` | `~/.omega-brain/` | Override the data directory for vault, ledger, and handoff files |
+
+---
+
+## Integrations
+
+Omega Brain MCP integrates with any MCP-compatible client using standard JSON-RPC 2.0 over stdio or SSE. For framework-specific integration patterns (LangChain, CrewAI, AutoGen, LlamaIndex) see [`INTEGRATIONS.md`](INTEGRATIONS.md) and the [`examples/`](examples/) directory.
+
+### Recommended Integration Pattern
+
+For production use, keep one persistent server process across all calls. This avoids the 2–3s cold-start cost of loading the embedding model and SQLite on every call.
+
+```python
+from omega_client import OmegaBrainClient
+
+client = OmegaBrainClient()  # starts server subprocess once
+
+# Governance-first: always run a Cortex check before executing
+check = client.call("omega_cortex_check", {
+    "tool": "omega_rag_query",
+    "args": {"query": "sensitive project data"},
+    "baseline_prompt": "You are a data analysis agent. Only access approved datasets."
+})
+# {"approved": true, "similarity": 0.71, "verdict": "APPROVED", "node_votes": [1, 1, 1]}
+
+# Memory retrieval
+result = client.call("omega_rag_query", {"query": "VERITAS evidence thresholds", "top_k": 5})
+
+# Run VERITAS build gate pipeline
+verdict = client.call("veritas_run_pipeline", {"claim": {...}, "regime": "baseline"})
+
+# Session persistence — always seal before terminating
+client.call("omega_seal_task", {})
+client.close()
+```
+
+### Quick-Reference Pattern Table
+
+| Goal | Tool | Notes |
+|---|---|---|
+| Pre-action guard (binary) | `omega_cortex_check` | Returns `approved: true/false` |
+| Pre-action guard + auto-fix | `omega_cortex_steer` | Returns steered args if in 0.45–0.65 window |
+| Full Cortex-wrapped execution | `omega_execute` | Omega Brain tools only; returns steered_args for external tools |
+| Memory / context retrieval | `omega_rag_query` / `omega_preload_context` | Use at agent task start |
+| Human-readable audit | `omega_brain_report` | SEAL chain tail, blocked count, VERITAS avg |
+| Session persistence | `omega_seal_task` | One call, no fields required |
+| Full artifact evaluation | `veritas_run_pipeline` | 10-gate deterministic verdict + seal hash |
 
 ---
 
 ## Usage Examples
 
-All examples use JSON-RPC 2.0. In practice your MCP client sends these automatically when you invoke a tool. The one-liner shell form is useful for testing.
+All examples use JSON-RPC 2.0. In practice, your MCP client sends these automatically when you invoke a tool. The shell one-liner form is useful for testing.
 
 ### Check server health
 
@@ -316,39 +416,6 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"omega_brai
       "type": "text",
       "text": "{\"vault_sessions\": 3, \"vault_entries\": 42, \"rag_fragments\": 18, \"ledger_entries\": 127, \"embedding_engine\": \"fastembed\", \"omega_status\": \"OK\"}"
     }]
-  }
-}
-```
-
-### Ingest a knowledge fragment
-
-```json
-{
-  "jsonrpc": "2.0", "id": 2,
-  "method": "tools/call",
-  "params": {
-    "name": "omega_ingest",
-    "arguments": {
-      "text": "The VERITAS pipeline requires all claims to declare their evidence regime before Gate 4.",
-      "source": "project-notes",
-      "tags": ["veritas", "evidence"]
-    }
-  }
-}
-```
-
-### Semantic RAG query
-
-```json
-{
-  "jsonrpc": "2.0", "id": 3,
-  "method": "tools/call",
-  "params": {
-    "name": "omega_rag_query",
-    "arguments": {
-      "query": "evidence regime requirements",
-      "top_k": 3
-    }
   }
 }
 ```
@@ -445,23 +512,6 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"omega_brai
 }
 ```
 
-### Python client (persistent process)
-
-```python
-from omega_client import OmegaBrainClient
-
-client = OmegaBrainClient()  # starts server subprocess once
-
-status  = client.call("omega_brain_status", {})
-result  = client.call("omega_rag_query", {"query": "VERITAS evidence", "top_k": 5})
-verdict = client.call("veritas_run_pipeline", {"claim": {...}, "regime": "baseline"})
-# ^ See the full claim structure in the "Run the full VERITAS pipeline" JSON-RPC example above
-
-client.close()
-```
-
-For framework integrations (LangChain, CrewAI, AutoGen, LlamaIndex) see [`INTEGRATIONS.md`](INTEGRATIONS.md) and the [`examples/`](examples/) directory.
-
 ---
 
 ## Tools Reference (26 Tools)
@@ -551,6 +601,7 @@ omega-brain-mcp/
 ├── pyproject.toml                  # Package config + optional deps
 ├── Dockerfile                      # Non-root, unbuffered, stdio + SSE
 ├── INTEGRATIONS.md                 # LangChain, CrewAI, AutoGen, LlamaIndex guides
+├── SECURITY.md                     # Vulnerability reporting policy
 ├── CHANGELOG.md                    # Release history
 ├── docs/
 │   └── integration.md              # Detailed integration reference
@@ -636,16 +687,93 @@ curl -N http://localhost:8055/sse
 
 ---
 
-## Security & Privacy
+## Security & Sovereignty
 
-- **All data is local.** The vault, SEAL ledger, RAG store, and handoff file are stored in `~/.omega-brain/` (or `OMEGA_BRAIN_DATA_DIR`). Nothing is sent to any external service.
+- **All data is local.** The vault, S.E.A.L. ledger, RAG store, and handoff file are stored in `~/.omega-brain/` (or `OMEGA_BRAIN_DATA_DIR`). No data is transmitted to any external service.
 - **No API keys required.** The server requires only a local Python installation and the `mcp` package.
-- **Cryptographic integrity.** The S.E.A.L. ledger uses SHA-3 256 hash chaining; any tampering with a past entry breaks the chain. Handoff files are SHA-256 sealed.
+- **Cryptographic integrity.** The S.E.A.L. ledger uses SHA-3-256 hash chaining; any tampering with a past entry breaks the chain. Handoff files are SHA-256 sealed.
 - **Cortex blocks drift.** The Cortex gate hard-blocks tool calls with similarity below `0.45` to the declared baseline prompt, preventing prompt injection from steering the agent off its declared mission.
 - **NAFE guardrails.** The NAFE scanner detects and seals AI narrative failures — including attempts to override constraints via ethical framing or authority assertions — before they propagate.
 - **Non-root Docker.** The provided `Dockerfile` runs as a non-root `omega` user.
 - **VERITAS gates are stateless and deterministic.** `veritas_build_gates.py` has no network calls, no file I/O, and no side effects. All verdicts are reproducible given the same input.
 - **Sensitive data handling.** Do not ingest secrets, credentials, or PII into the RAG store or vault. The vault is unencrypted SQLite on disk; protect it with OS-level file permissions.
+
+For vulnerability reporting, see [`SECURITY.md`](SECURITY.md).
+
+---
+
+## Threat Model
+
+### In Scope
+
+| Threat | Mitigation |
+|--------|-----------|
+| Tampered audit records | S.E.A.L. SHA-3-256 hash chain; any modified entry breaks chain verification |
+| Agent prompt injection steering execution off declared baseline | Cortex Tri-Node gate hard-blocks calls below similarity threshold `0.45` |
+| AI narrative failures bypassing constraints | NAFE scanner detects and seals rescue framing, moral override, intent inference, authority drift |
+| Unapproved state transitions in agent execution | CLAEG state machine; absence of allowed transition is prohibition |
+| Artifact deployment without declared evidence | VERITAS 10-gate pipeline requires structured evidence, constraints, and cost model before issuing a verdict |
+| Unsigned or tampered cross-session memory | Handoff files are SHA-256 sealed; tampering is detected on load |
+
+### Out of Scope
+
+The following threats are **not** addressed by Omega Brain MCP:
+
+- **Compromised host or operating system** — if the process environment is controlled by an adversary, no application-layer protection is sufficient
+- **Stolen or leaked vault encryption keys** — the vault is unencrypted SQLite; OS-level access controls are the operator's responsibility
+- **Malicious administrator** — an operator with filesystem access can modify or delete the data directory directly
+- **Supply-chain compromise of `mcp` or Python itself** — dependency integrity verification is the operator's responsibility; use lock files and hash verification
+- **Network-level attacks** — SSE mode exposes an HTTP endpoint; TLS termination and network access control are the operator's responsibility
+- **Model-level jailbreaks** — Cortex gates on declared tool calls; it does not govern the language model's internal reasoning or responses
+
+### Trust Boundaries
+
+```
+  [ MCP Client / AI Agent ]
+           │
+           │  Trust: MCP client is the operator's declared agent.
+           │         Baseline prompt defines the trust contract.
+           ▼
+  [ Omega Brain MCP Server ]  ← Enforcement boundary
+           │
+           │  Trust: Local filesystem is operator-controlled.
+           │         No external services are contacted.
+           ▼
+  [ ~/.omega-brain/ (vault, ledger, handoff) ]
+```
+
+The Cortex gate is the primary trust enforcement point. All tool calls cross this boundary. The VERITAS pipeline enforces evidence-based policy on artifact claims. The S.E.A.L. ledger provides a tamper-evident record of all crossings.
+
+---
+
+## Roadmap
+
+| Milestone | Status | Description |
+|-----------|--------|-------------|
+| v2.1 — Core governance stack | Released | Cortex gate, S.E.A.L. ledger, 10-gate VERITAS pipeline, CLAEG, NAFE |
+| v2.2 — Vault encryption | Planned | Optional AES-256-GCM encryption for the local SQLite vault |
+| v2.3 — Ledger export & attestation | Planned | Structured ledger export for external audit tools; Merkle root attestation |
+| v2.4 — Multi-agent handoff | Planned | Verified cross-agent memory transfer with provenance chain |
+| v3.0 — Ecosystem bridge | Planned | Native integration with Aegis policy engine and Veritas Vault retention layer |
+
+Community contributions are welcome. See [`CONTRIBUTING.md`](.github/CONTRIBUTING.md) for invariants that must not be broken.
+
+---
+
+## Omega Universe
+
+Omega Brain MCP is the governance control plane of the **VERITAS & Sovereign Ecosystem**. The following repositories form the broader Omega Universe:
+
+| Repository | Role |
+|------------|------|
+| [VrtxOmega/omega-brain-mcp](https://github.com/VrtxOmega/omega-brain-mcp) | **This repo** — Governance control plane: Cortex gate, VERITAS pipeline, S.E.A.L. ledger |
+| [VrtxOmega/veritas-vault](https://github.com/VrtxOmega/veritas-vault) | Retention substrate — deterministic storage under VERITAS constraints |
+| [VrtxOmega/Aegis](https://github.com/VrtxOmega/Aegis) | Policy enforcement engine — sovereign access control layer |
+| [VrtxOmega/aegis-rewrite](https://github.com/VrtxOmega/aegis-rewrite) | Next-generation Aegis rewrite |
+| [VrtxOmega/drift](https://github.com/VrtxOmega/drift) | Semantic drift detection and correction for agent pipelines |
+| [VrtxOmega/SovereignMedia](https://github.com/VrtxOmega/SovereignMedia) | Sovereign desktop media application |
+| [VrtxOmega/Ollama-Omega](https://github.com/VrtxOmega/Ollama-Omega) | Local LLM bridge — Ollama integration with Omega governance layer |
+| [VrtxOmega/sovereign-arcade](https://github.com/VrtxOmega/sovereign-arcade) | Sovereign application arcade |
 
 ---
 
@@ -661,6 +789,7 @@ MIT — see [`LICENSE`](LICENSE) for full text.
     <a href="https://github.com/VrtxOmega/omega-brain-mcp/issues">Report Issue</a> ·
     <a href="CHANGELOG.md">Changelog</a> ·
     <a href="INTEGRATIONS.md">Integrations</a> ·
+    <a href="SECURITY.md">Security Policy</a> ·
     <a href="https://glama.ai/mcp/servers/VrtxOmega/omega-brain-mcp">Glama MCP Registry</a>
   </sub>
 </div>
