@@ -57,7 +57,7 @@ Omega Brain MCP is the cognitive layer of the **VERITAS Omega** ecosystem. It ru
 - **Zero-config cross-session memory** — vault (SQLite + FTS5) persists sessions, entries, and events across restarts; auto-loaded at startup via `omega://session/preload`
 - **Semantic RAG provenance** — 3-tier embedding engine: `sentence-transformers` → `fastembed` ONNX → TF-IDF n-gram (always works, no GPU required)
 - **Cryptographic S.E.A.L. ledger** — append-only SHA-3 256 hash chain; every cortex check, ingest, session log, and execution is automatically sealed
-- **Cortex approval gate** — Tri-Node similarity gate with hard-block (`< 0.45`) and steer (`0.45–0.65`) windows; blocks NAEF drift before execution
+- **Cortex approval gate** — Tri-Node similarity gate with hard-block (`< 0.45`) and steer (`0.45–0.65`) windows; blocks NAFE drift before execution
 - **Sealed handoff** — SHA-256 signed cross-session memory file; auto-loaded on restart, auto-written on task seal
 - **10-gate VERITAS build pipeline** — INTAKE → TYPE → DEPENDENCY → EVIDENCE → MATH → COST → INCENTIVE → SECURITY → ADVERSARY → TRACE/SEAL; fail-fast on VIOLATION
 - **CLAEG state machine** — Constraint-locked 3-state machine (STABLE\_CONTINUATION, ISOLATED\_CONTAINMENT, TERMINAL\_SHUTDOWN); absence of allowed transition = prohibition
@@ -455,6 +455,7 @@ client = OmegaBrainClient()  # starts server subprocess once
 status  = client.call("omega_brain_status", {})
 result  = client.call("omega_rag_query", {"query": "VERITAS evidence", "top_k": 5})
 verdict = client.call("veritas_run_pipeline", {"claim": {...}, "regime": "baseline"})
+# ^ See the full claim structure in the "Run the full VERITAS pipeline" JSON-RPC example above
 
 client.close()
 ```
