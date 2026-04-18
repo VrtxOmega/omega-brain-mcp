@@ -205,13 +205,45 @@ def quality(evidence_item: dict, policy_env: dict = None) -> float:
 # §5 — MIS_GREEDY (Maximum Independent Set — Greedy) (spec §9)
 # ══════════════════════════════════════════════════════════════════
 
+def _normalize_id(val: Any) -> Optional[str]:
+    """
+    Coerce an evidence ID or chain entry to a plain string.
+    Dicts (nested EvidenceItem objects arriving from JSON deserialization)
+    are hashed to a deterministic string so they are usable as set/dict keys.
+    None / non-string scalars are coerced via str().
+    """
+    if isinstance(val, str):
+        return val
+    if isinstance(val, dict):
+        # Nested dependency object — derive a stable identifier from its 'id'
+        # field if present, otherwise hash the whole dict.
+        inner = val.get("id")
+        if isinstance(inner, str) and inner:
+            return inner
+        return canonical_hash(val)
+    if val is None:
+        return None
+    return str(val)
+
+
 def _build_independence_graph(items: list[dict]) -> dict[str, set[str]]:
     """
     Build adjacency for evidence items. Edge between e_i, e_j if:
       - same source_id
       - same tool + same config + |dt| <= 60s
       - explicit dependency declared
+
+    BUG-FIX (v2.1.1): provenance.chain / EvidenceItem.dependencies entries
+    arriving from JSON deserialization may be nested dicts instead of plain
+    string hash IDs.  _normalize_id() coerces them to strings before any
+    set construction, preventing TypeError: unhashable type: 'dict'.
+    Evidence items without an 'id' field receive a stable fallback hash.
     """
+    # Ensure every item has a usable string id (fallback = hash of item)
+    for e in items:
+        if not isinstance(e.get("id"), str) or not e["id"]:
+            e["id"] = canonical_hash({k: v for k, v in e.items() if k != "id"})
+
     adj: dict[str, set[str]] = {e["id"]: set() for e in items}
     for i, ei in enumerate(items):
         for j, ej in enumerate(items):
@@ -238,9 +270,11 @@ def _build_independence_graph(items: list[dict]) -> dict[str, set[str]]:
                         continue
                 except Exception:
                     pass
-            # Explicit dependency
-            chain_i = set(pi.get("chain") or [])
-            chain_j = set(pj.get("chain") or [])
+            # Explicit dependency — normalise each chain entry to a string
+            raw_chain_i = pi.get("chain") or []
+            raw_chain_j = pj.get("chain") or []
+            chain_i = {_normalize_id(c) for c in raw_chain_i if c is not None}
+            chain_j = {_normalize_id(c) for c in raw_chain_j if c is not None}
             if ej["id"] in chain_i or ei["id"] in chain_j:
                 adj[ei["id"]].add(ej["id"])
                 adj[ej["id"]].add(ei["id"])
@@ -531,8 +565,10 @@ def _extract_symbols(constraint: Any) -> set[str]:
         if "operand" in constraint:
             symbols.update(_extract_symbols(constraint["operand"]))
     elif isinstance(constraint, str):
-        if not constraint.replace(".", "").replace("-", "").isdigit():
-            symbols.add(constraint)
+        for match in re.finditer(r'[A-Za-z_][A-Za-z0-9_]*', constraint):
+            word = match.group(0)
+            if word not in ("and", "or", "not", "AND", "OR", "NOT"):
+                symbols.add(word)
     return symbols
 
 
@@ -765,15 +801,36 @@ def math_gate(claim: dict) -> dict:
     boundaries = claim.get("boundaries", [])
 
     # Build variable bindings from evidence
+    # Two maps: numeric for arithmetic constraints, categorical for equality constraints
     collected: dict[str, list[float]] = {}
+    categorical_bindings: dict[str, str] = {}  # last-wins for categorical values
     for e in evidence_items:
         var = e.get("variable", "")
         v = e.get("value", {})
         val = None
         if isinstance(v, dict) and "x" in v:
-            val = float(v["x"])
+            try:
+                val = float(v["x"])
+            except (ValueError, TypeError):
+                # Categorical/EnumSet value — store as string, skip numeric binding
+                if var:
+                    categorical_bindings[var] = str(v["x"])
+                continue
+        elif isinstance(v, dict) and "v" in v:
+            # Explicit Categorical value
+            if var:
+                categorical_bindings[var] = str(v["v"])
+            continue
         elif isinstance(v, (int, float)):
             val = float(v)
+        elif isinstance(v, str):
+            # Raw string evidence value
+            try:
+                val = float(v)
+            except (ValueError, TypeError):
+                if var:
+                    categorical_bindings[var] = v
+                continue
             
         if var and val is not None:
             collected.setdefault(var, []).append(val)
@@ -785,7 +842,7 @@ def math_gate(claim: dict) -> dict:
 
     for boundary in boundaries:
         constraint = boundary.get("constraint", {})
-        sat = _evaluate_constraint(constraint, bindings)
+        sat = _evaluate_constraint(constraint, bindings, categorical_bindings)
         if sat is None:
             # Missing bindings — cannot evaluate
             reasons.append("UNSAT_CONSTRAINT")
@@ -808,7 +865,8 @@ def math_gate(claim: dict) -> dict:
     return gate_result("MATH", Verdict.PASS, details={"boundaries_sat": len(boundaries), "bindings": len(bindings)})
 
 
-def _evaluate_constraint(constraint: dict, bindings: dict[str, float]) -> Optional[bool]:
+def _evaluate_constraint(constraint: Any, bindings: dict[str, float],
+                         categorical_bindings: dict[str, str] = None) -> Optional[bool]:
     """
     Evaluate a constraint expression against variable bindings.
     Returns True (SAT), False (UNSAT), or None (cannot evaluate).
@@ -819,9 +877,26 @@ def _evaluate_constraint(constraint: dict, bindings: dict[str, float]) -> Option
       {"op": "and", "operands": [...]}
       {"op": "or", "operands": [...]}
       {"op": "not", "operand": {...}}
+      "var_name <= 200"
+      {"op": "==", "left": "status", "right": "PASS"}  (categorical)
+      {"op": "in", "left": "status", "right": ["PASS", "OK"]}  (set membership)
     """
+    if categorical_bindings is None:
+        categorical_bindings = {}
+
     if not constraint:
         return True
+
+    if isinstance(constraint, str):
+        m = re.match(r'^\s*(.+?)\s*(<=|>=|<|>|==|!=)\s*(.+?)\s*$', constraint)
+        if m:
+            constraint = {
+                "op": m.group(2),
+                "left": m.group(1).strip(),
+                "right": m.group(3).strip()
+            }
+        else:
+            return None
 
     # Normalize shorthand format {variable, operator, target}
     # to canonical format {op, left, right}
@@ -836,25 +911,53 @@ def _evaluate_constraint(constraint: dict, bindings: dict[str, float]) -> Option
 
     if op in ("and", "AND"):
         operands = constraint.get("operands", [])
-        results = [_evaluate_constraint(o, bindings) for o in operands]
+        results = [_evaluate_constraint(o, bindings, categorical_bindings) for o in operands]
         if None in results:
             return None
         return all(results)
 
     if op in ("or", "OR"):
         operands = constraint.get("operands", [])
-        results = [_evaluate_constraint(o, bindings) for o in operands]
+        results = [_evaluate_constraint(o, bindings, categorical_bindings) for o in operands]
         if None in results:
             return None
         return any(results)
 
     if op in ("not", "NOT"):
-        inner = _evaluate_constraint(constraint.get("operand", {}), bindings)
+        inner = _evaluate_constraint(constraint.get("operand", {}), bindings, categorical_bindings)
         return None if inner is None else not inner
 
-    # Relational: left op right
-    left = _resolve_value(constraint.get("left"), bindings)
-    right = _resolve_value(constraint.get("right"), bindings)
+    # ── Set membership: {"op": "in", "left": "var", "right": ["A", "B"]} ──
+    if op in ("in", "IN"):
+        left_key = constraint.get("left", "")
+        right_set = constraint.get("right", [])
+        if isinstance(left_key, str) and left_key in categorical_bindings:
+            return categorical_bindings[left_key] in right_set
+        return None
+
+    # ── Categorical equality: try categorical bindings before numeric ──
+    left_raw = constraint.get("left")
+    right_raw = constraint.get("right")
+
+    if op in ("==", "!="):
+        # Check if either side is a categorical variable
+        left_cat = categorical_bindings.get(left_raw) if isinstance(left_raw, str) else None
+        right_cat = categorical_bindings.get(right_raw) if isinstance(right_raw, str) else None
+        left_str = left_cat or (left_raw if isinstance(left_raw, str) else None)
+        right_str = right_cat or (right_raw if isinstance(right_raw, str) else None)
+
+        # If at least one side resolves categorically and can't be a number, use string comparison
+        if left_cat is not None or right_cat is not None:
+            l = left_cat if left_cat is not None else str(left_raw)
+            r = right_cat if right_cat is not None else str(right_raw)
+            if op == "==":
+                return l == r
+            else:  # !=
+                return l != r
+
+    # Relational: left op right (numeric path)
+    left = _resolve_value(left_raw, bindings)
+    right = _resolve_value(right_raw, bindings)
 
     if left is None or right is None:
         return None
@@ -1115,6 +1218,8 @@ def adversary_gate(claim: dict) -> dict:
       Apply transform, check result.
     Fragility = count(degrading) / count(total)
     """
+    import copy
+    
     reasons = []
     witnesses = []
     verdict = Verdict.PASS
@@ -1125,64 +1230,74 @@ def adversary_gate(claim: dict) -> dict:
     if not attacks:
         return gate_result("ADVERSARY", Verdict.PASS, details={"attacks": 0})
 
+    # compute baseline
+    b_ev = evidence_gate(claim)
+    b_math = math_gate(claim)
+    b_cost = cost_gate(claim)
+    b_inc = incentive_gate(claim)
+    baseline_verdict = Verdict.worst_of([b_ev["verdict"], b_math["verdict"], b_cost["verdict"], b_inc["verdict"]])
+
     degrading_count = 0
 
     for attack in attacks:
         aid = attack.get("id", "unknown")
         transform = attack.get("transform", {})
-        result = attack.get("result", {})
-        attack_type = transform.get("type", attack.get("category", ""))
+        category = attack.get("category", "")
+        t_type = transform.get("type", category)
+        
+        claim_a = copy.deepcopy(claim)
+        
+        # Apply transform
+        if t_type == "InflateBound" or transform.get("factor") is not None:
+            target = transform.get("target")
+            factor = float(transform.get("factor", 1.5))
+            for b in claim_a.get("boundaries", []):
+                c = b.get("constraint")
+                if isinstance(c, dict) and c.get("left") == target:
+                    if isinstance(c.get("right"), (int, float)):
+                        c["right"] *= factor
+                elif isinstance(c, str):
+                    m = re.match(r'^\s*(.+?)\s*(<=|>=|<|>|==|!=)\s*(.+?)\s*$', c)
+                    if m and m.group(1).strip() == target:
+                        val = float(m.group(3).strip()) * factor
+                        b["constraint"] = f"{target} {m.group(2)} {val}"
+        
+        elif t_type == "RemoveEvidence" or (transform.get("evidence_id") is not None and "sigma_mult" not in transform):
+            ev_id = transform.get("evidence_id")
+            claim_a["evidence"] = [e for e in claim_a.get("evidence", []) if e.get("id") != ev_id]
+            
+        elif t_type == "PerturbParam" or transform.get("param") is not None:
+            param = transform.get("param")
+            delta = float(transform.get("delta_rel", 0.1))
+            hash_val = int(hashlib.md5(str(aid).encode()).hexdigest()[:8], 16)
+            sign = 1 if hash_val % 2 == 0 else -1
+            for e in claim_a.get("evidence", []):
+                if e.get("variable") == param:
+                    v = e.get("value", {})
+                    if isinstance(v, dict) and "x" in v:
+                        v["x"] = float(v["x"]) * (1 + sign * delta)
+                    elif isinstance(v, (int, float)):
+                        e["value"] = float(v) * (1 + sign * delta)
+                        
+        elif t_type == "PerturbEvidence" or transform.get("sigma_mult") is not None:
+            ev_id = transform.get("evidence_id")
+            sigma_mult = float(transform.get("sigma_mult", 1.5))
+            for e in claim_a.get("evidence", []):
+                if e.get("id") == ev_id:
+                    v = e.get("value", {})
+                    if isinstance(v, dict) and v.get("uncertainty") is not None:
+                        v["uncertainty"] = float(v["uncertainty"]) * sigma_mult
 
-        if attack_type == "FuzzInput":
-            if result.get("crash"):
-                reasons.append("FUZZ_CRASH")
-                witnesses.append({"attack": aid, "details": result.get("details", "")[:200]})
-                verdict = Verdict.worst(verdict, Verdict.VIOLATION)
-                degrading_count += 1
-            elif result.get("anomaly"):
-                reasons.append("FUZZ_ANOMALY")
-                witnesses.append({"attack": aid})
-                verdict = Verdict.worst(verdict, Verdict.MODEL_BOUND)
-                degrading_count += 1
-
-        elif attack_type == "InjectDependency":
-            if result.get("bypassed"):
-                reasons.append("SUPPLY_CHAIN_BYPASS")
-                witnesses.append({"attack": aid, "package": transform.get("package")})
-                verdict = Verdict.worst(verdict, Verdict.VIOLATION)
-                degrading_count += 1
-
-        elif attack_type == "SimulateOutage":
-            if result.get("crash") or result.get("data_loss"):
-                reasons.append("OUTAGE_FRAGILE")
-                witnesses.append({"attack": aid, "service": transform.get("service")})
-                verdict = Verdict.worst(verdict, Verdict.VIOLATION)
-                degrading_count += 1
-
-        elif attack_type == "SpikeLoad":
-            if result.get("exceeded_boundary"):
-                reasons.append("LOAD_FRAGILE")
-                witnesses.append({"attack": aid, "factor": transform.get("factor")})
-                v = Verdict.VIOLATION if result.get("full_breach") else Verdict.MODEL_BOUND
-                verdict = Verdict.worst(verdict, v)
-                degrading_count += 1
-
-        elif attack_type == "MutateSource":
-            if result.get("survived"):
-                reasons.append("MUTANT_SURVIVED")
-                witnesses.append({"attack": aid, "file": transform.get("file")})
-                degrading_count += 1
-
-        elif attack_type == "ExploitVector":
-            if result.get("succeeded"):
-                reasons.append("EXPLOIT_SUCCESS")
-                witnesses.append({
-                    "attack": aid,
-                    "category": transform.get("category"),
-                    "severity": attack.get("severity"),
-                })
-                verdict = Verdict.worst(verdict, Verdict.VIOLATION)
-                degrading_count += 1
+        # run eval
+        a_ev = evidence_gate(claim_a)
+        a_math = math_gate(claim_a)
+        a_cost = cost_gate(claim_a)
+        a_inc = incentive_gate(claim_a)
+        a_verdict = Verdict.worst_of([a_ev["verdict"], a_math["verdict"], a_cost["verdict"], a_inc["verdict"]])
+        
+        if Verdict._PRECEDENCE.get(a_verdict, 0) > Verdict._PRECEDENCE.get(baseline_verdict, 0):
+            degrading_count += 1
+            witnesses.append({"attack": aid, "category": category, "baseline": baseline_verdict, "degraded_to": a_verdict})
 
     # Fragility calculation
     total = len(attacks)

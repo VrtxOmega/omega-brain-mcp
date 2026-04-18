@@ -860,37 +860,44 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
     if not HAS_BUILD_GATES:
         return json.dumps({"error": "VERITAS Build Gates not available. Check veritas_build_gates.py."})
 
+    claim_data = arguments.get("claim", {})
+    if isinstance(claim_data, str):
+        try:
+            claim_data = json.loads(claim_data)
+        except Exception:
+            claim_data = {}
+
     if name == "veritas_intake_gate":
-        return json.dumps(intake_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(intake_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_type_gate":
-        return json.dumps(type_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(type_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_dependency_gate":
-        return json.dumps(dependency_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(dependency_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_evidence_gate":
         regime = arguments.get("regime", "dev")
-        return json.dumps(evidence_gate(arguments.get("claim", {}), regime), indent=2, default=str)
+        return json.dumps(evidence_gate(claim_data, regime), indent=2, default=str)
 
     if name == "veritas_math_gate":
-        return json.dumps(math_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(math_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_cost_gate":
-        return json.dumps(cost_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(cost_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_incentive_gate":
-        return json.dumps(incentive_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(incentive_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_security_gate":
-        return json.dumps(security_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(security_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_adversary_gate":
-        return json.dumps(adversary_gate(arguments.get("claim", {})), indent=2, default=str)
+        return json.dumps(adversary_gate(claim_data), indent=2, default=str)
 
     if name == "veritas_run_pipeline":
         fail_fast = arguments.get("fail_fast", True)
-        result = run_pipeline(arguments.get("claim", {}), fail_fast=fail_fast)
+        result = run_pipeline(claim_data, fail_fast=fail_fast)
         # Auto-seal to SEAL ledger
         _seal_event("veritas_pipeline_run", {
             "claim_id": result.get("claim_id", "")[:32],
@@ -1437,8 +1444,10 @@ if HAS_MCP:
 
         except Exception as e:
             log.error(f"Tool {name} error: {e}")
+            import traceback
+            tb = traceback.format_exc()
             return [TextContent(type="text", text=json.dumps({
-                "error": str(e), "tool": name, "veritas_code": "TOOL_ERROR"
+                "error": str(e), "traceback": tb, "tool": name, "veritas_code": "TOOL_ERROR"
             }))]
 
     # ── Resources ────────────────────────────────────────────────
@@ -1458,7 +1467,7 @@ if HAS_MCP:
             Resource(uri="omega://brain/status", name="Omega Brain Status",
                      description="DB stats, embedding engine, ledger count.",
                      mimeType="application/json"),
-            Resource(uri="veritas://spec/v1.0.0", name="VERITAS Omega Build Spec v1.0.0",
+            Resource(uri="veritas://spec/v2.0.0", name="VERITAS Omega Build Spec v2.0.0",
                      description="Canonical specification: invariants, thresholds, gate order, type system. Read-only source of truth.",
                      mimeType="application/json"),
             Resource(uri="veritas://claeg/grammar", name="CLAEG Grammar",
@@ -1491,8 +1500,8 @@ if HAS_MCP:
             lc = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
             conn.close()
             return json.dumps({"fragments": fc, "ledger_entries": lc, "mode": "STANDALONE"})
-        if uri == "veritas://spec/v1.0.0":
-            spec_path = Path(__file__).parent.parent / "VERITAS_OMEGA_BUILD_SPEC_v1_0_0.md"
+        if uri == "veritas://spec/v2.0.0":
+            spec_path = Path(__file__).parent.parent / "VERITAS_OMEGA_CODE_v2.0.md"
             if spec_path.exists():
                 return spec_path.read_text(encoding="utf-8")
             return json.dumps({"error": "Spec file not found", "searched": str(spec_path)})

@@ -901,7 +901,7 @@ def build_pdf():
         ["omega://session/handoff", "Last Session Handoff", "SHA-256 verified cross-session handoff"],
         ["omega://session/current", "Current MCP Session", "Session ID, call count, data directory"],
         ["omega://brain/status", "Omega Brain Status", "DB stats, embedding engine, ledger count"],
-        ["veritas://spec/v1.0.0", "VERITAS Omega Build Spec", "Full canonical spec (read-only source of truth)"],
+        ["veritas://spec/v2.0.0", "VERITAS Omega Build Spec v2.0.0", "Full canonical spec (read-only source of truth)"],
         ["veritas://claeg/grammar", "CLAEG Grammar", "Terminal states, transitions, invariants, prohibitions"],
         ["veritas://gates/order", "Gate Order", "The 10-gate pipeline sequence"],
         ["veritas://thresholds/baseline", "Baseline Thresholds", "Dev/baseline regime numeric thresholds"],

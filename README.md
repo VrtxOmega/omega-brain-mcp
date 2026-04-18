@@ -164,6 +164,8 @@ Every gate returns a structured verdict (`PASS`, `MODEL_BOUND`, `INCONCLUSIVE`, 
 | **Build Gates** | CLAEG | Constraint-locked state machine with 3 terminal states |
 | **Build Gates** | NAFE Scanner | Narrative failure signature detection and auto-seal |
 
+> 🏛️ **Protocol Standard:** The `omega-brain-mcp` is the official execution engine for the [VERITAS Ω-CODE v2.0](../VERITAS-Omega-CODE) specification. The structural gates here enforce the deterministic claims that power veritas-vault session capture, AEGIS remediation, and Sovereign artifacts.
+
 ### Verdict System
 
 | Verdict | Precedence | Meaning |
@@ -563,7 +565,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"omega_brai
 | `omega://session/handoff` | SHA-256 verified cross-session handoff |
 | `omega://session/current` | Session ID, call count, data directory |
 | `omega://brain/status` | DB stats, embedding engine, ledger count |
-| `veritas://spec/v1.0.0` | Full canonical VERITAS Omega Build Spec |
+| `veritas://spec/v2.0.0` | Full canonical VERITAS Omega Build Spec v2.0.0 |
 | `veritas://claeg/grammar` | Terminal states, transitions, invariants, prohibitions |
 | `veritas://gates/order` | The 10-gate pipeline sequence |
 | `veritas://thresholds/baseline` | Dev/baseline regime numeric thresholds |

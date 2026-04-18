@@ -25,7 +25,7 @@
 - NAFE scanner: `veritas_nafe_scan`
 
 **Resources (5 new)**
-- `veritas://spec/v1.0.0` — Canonical specification (read-only source of truth)
+- `veritas://spec/v2.0.0` — Canonical specification v2.0.0 (read-only source of truth)
 - `veritas://claeg/grammar` — Terminal states, transitions, invariants, prohibitions
 - `veritas://gates/order` — 10-gate pipeline sequence
 - `veritas://thresholds/baseline` — Dev regime numeric thresholds
