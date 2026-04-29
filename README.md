@@ -779,6 +779,18 @@ Omega Brain MCP is the governance control plane of the **VERITAS & Sovereign Eco
 
 ---
 
+## 🌐 VERITAS Omega Ecosystem
+
+This project is part of the [VERITAS Omega Universe](https://github.com/VrtxOmega/veritas-portfolio) — a sovereign AI infrastructure stack.
+
+- [VERITAS-Omega-CODE](https://github.com/VrtxOmega/VERITAS-Omega-CODE) — Deterministic verification spec (10-gate pipeline)
+- [Gravity-Omega](https://github.com/VrtxOmega/Gravity-Omega) — Desktop AI operator platform
+- [Ollama-Omega](https://github.com/VrtxOmega/Ollama-Omega) — Ollama MCP bridge for any IDE
+- [OmegaWallet](https://github.com/VrtxOmega/OmegaWallet) — Desktop Ethereum wallet (renderer-cannot-sign)
+- [veritas-vault](https://github.com/VrtxOmega/veritas-vault) — Local-first AI knowledge engine
+- [sovereign-arcade](https://github.com/VrtxOmega/sovereign-arcade) — 8-game arcade with VERITAS design system
+- [SSWP](https://github.com/VrtxOmega/sswp-mcp) — Deterministic build attestation protocol
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE) for full text.
