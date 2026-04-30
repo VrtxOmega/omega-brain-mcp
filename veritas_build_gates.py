@@ -1244,7 +1244,19 @@ def adversary_gate(claim: dict) -> dict:
         transform = attack.get("transform", {})
         category = attack.get("category", "")
         t_type = transform.get("type", category)
-        
+        result = attack.get("result", {}) or {}
+
+        # Inspect terminal attack outcomes before running transforms
+        if category == "fuzz" and result.get("crash") is True:
+            reasons.append("FUZZ_CRASH")
+            witnesses.append({"attack": aid, "category": category, "result": result})
+            return gate_result("ADVERSARY", Verdict.VIOLATION, reasons, witnesses)
+
+        if category == "exploit" and result.get("succeeded") is True:
+            reasons.append("EXPLOIT_SUCCESS")
+            witnesses.append({"attack": aid, "category": category, "result": result})
+            return gate_result("ADVERSARY", Verdict.VIOLATION, reasons, witnesses)
+
         claim_a = copy.deepcopy(claim)
         
         # Apply transform
