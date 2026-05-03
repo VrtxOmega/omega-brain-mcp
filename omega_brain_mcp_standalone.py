@@ -954,7 +954,7 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
 try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent, Resource, Prompt, PromptMessage, PromptArgument
+    from mcp.types import Tool, TextContent, Resource, ResourceTemplate, Prompt, PromptMessage, PromptArgument
     HAS_MCP = True
 except ImportError:
     HAS_MCP = False
@@ -1484,6 +1484,23 @@ if HAS_MCP:
                      mimeType="application/json"),
         ]
 
+    @app.list_resource_templates()
+    async def list_resource_templates():
+        return [
+            ResourceTemplate(
+                uriTemplate="omega://session/{session_id}",
+                name="Session Lookup",
+                description="Retrieve vault entries and ledger events for a specific session ID.",
+                mimeType="application/json"
+            ),
+            ResourceTemplate(
+                uriTemplate="veritas://claim/{claim_id}",
+                name="Claim Lookup",
+                description="Retrieve the VERITAS pipeline verdict and seal hash for a specific claim ID.",
+                mimeType="application/json"
+            ),
+        ]
+
     @app.read_resource()
     async def read_resource(uri: str) -> str:
         if uri == "omega://session/preload":
@@ -1538,6 +1555,42 @@ if HAS_MCP:
             if HAS_BUILD_GATES:
                 return json.dumps(resolve_thresholds("production"), indent=2)
             return json.dumps({"error": "Build gates not loaded"})
+        # Resource templates (parameterized URIs)
+        import re as _re
+        m = _re.match(r'^omega://session/(.+)$', uri)
+        if m:
+            session_id = m.group(1)
+            conn = _db()
+            entries = conn.execute(
+                "SELECT content, created_at FROM entries WHERE session_id=? LIMIT 20", (session_id,)
+            ).fetchall()
+            ledger = conn.execute(
+                "SELECT context, response, created_at FROM ledger WHERE json_extract(context, '$.session_id')=? LIMIT 20", (session_id,)
+            ).fetchall()
+            conn.close()
+            return json.dumps({
+                "session_id": session_id,
+                "entry_count": len(entries),
+                "entries": [{"content": e[0][:500], "created_at": e[1]} for e in entries],
+                "ledger_count": len(ledger),
+                "ledger": [{"context": str(l[0])[:200], "response": str(l[1])[:200], "created_at": l[2]} for l in ledger],
+            }, indent=2, default=str)
+        m = _re.match(r'^veritas://claim/(.+)$', uri)
+        if m:
+            claim_id = m.group(1)
+            conn = _db()
+            row = conn.execute(
+                "SELECT context, response, created_at FROM ledger WHERE json_extract(context, '$.claim_id')=? ORDER BY created_at DESC LIMIT 1", (claim_id,)
+            ).fetchone()
+            conn.close()
+            if row:
+                return json.dumps({
+                    "claim_id": claim_id,
+                    "context": str(row[0])[:500],
+                    "response": str(row[1])[:500],
+                    "created_at": row[2],
+                }, indent=2, default=str)
+            return json.dumps({"claim_id": claim_id, "found": False})
         return json.dumps({"error": f"Unknown resource: {uri}"})
 
     # ── Prompts ──────────────────────────────────────────────────
