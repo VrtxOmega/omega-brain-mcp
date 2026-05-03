@@ -73,6 +73,15 @@ try:
 except ImportError:
     HAS_BUILD_GATES = False
 
+# ── VERITAS Bridge (cross-system integration) ─────────────────
+try:
+    sys.path.insert(0, str(Path(__file__).parent))
+    import veritas_bridge as _bridge
+    HAS_BRIDGE = True
+except Exception:
+    HAS_BRIDGE = False
+    _bridge = None  # type: ignore
+
 log = logging.getLogger("OmegaBrain.Standalone")
 
 # ══════════════════════════════════════════════════════════════════
@@ -121,9 +130,9 @@ def _init_embeddings():
     # Tier 2: fastembed (ONNX — zero GPU, ~30MB model cached on first use)
     try:
         from fastembed import TextEmbedding
-        _embed_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        _embed_model = TextEmbedding(model_name="snowflake/snowflake-arctic-embed-xs")
         _EMBED_ENGINE = "fastembed-onnx"
-        log.info("[omega-brain] Embeddings: fastembed ONNX (BAAI/bge-small-en-v1.5)")
+        log.info("[omega-brain] Embeddings: fastembed ONNX (snowflake/snowflake-arctic-embed-xs)")
         return
     except Exception:
         pass
@@ -138,7 +147,7 @@ def _embed(text: str) -> list[float]:
     if _EMBED_ENGINE == "sentence-transformers" and _embed_model:
         return _embed_model.encode(text, normalize_embeddings=True).tolist()
     if _EMBED_ENGINE == "fastembed-onnx" and _embed_model:
-        return list(next(iter(_embed_model.embed([text]))))
+        return [float(x) for x in next(iter(_embed_model.embed([text])))]
     # TF-IDF n-gram fallback (128-dim)
     t = text.lower()
     ngrams: dict[str, int] = {}
@@ -220,11 +229,20 @@ def _init_db():
             timestamp TEXT
         );
     """)
-    # FTS5 for vault entries
+    # FTS5 for vault entries (chat history)
     try:
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
                 content, session_id, tokenize='porter unicode61'
+            )
+        """)
+    except Exception:
+        pass
+    # FTS5 for provenance fragments (Bible, project_index, etc.)
+    try:
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS fragments_fts USING fts5(
+                content, source, tier, tokenize='porter unicode61'
             )
         """)
     except Exception:
@@ -306,15 +324,23 @@ def _vault_log_session(session_id: str, task: str, decisions: list, files: list)
     return {"logged": True, "session_id": sid, "seal_hash": seal[:16]}
 
 def _vault_search(query: str) -> dict:
-    """FTS keyword search over vault entries."""
+    """FTS keyword search over vault entries (chat) OR provenance fragments (Bible/projects)."""
     if not query:
         return {"results": [], "count": 0}
     try:
         conn = _db()
-        rows = conn.execute(
-            "SELECT content, session_id as title FROM entries_fts WHERE entries_fts MATCH ? LIMIT 20",
-            (query,)
-        ).fetchall()
+        # Try fragments FTS first (Bible entries, project index, etc.)
+        try:
+            rows = conn.execute(
+                "SELECT content, source as title, tier FROM fragments_fts WHERE fragments_fts MATCH ? LIMIT 20",
+                (query,)
+            ).fetchall()
+        except Exception:
+            # Fallback to entries FTS (chat history)
+            rows = conn.execute(
+                "SELECT content, session_id as title, tier FROM entries_fts WHERE entries_fts MATCH ? LIMIT 20",
+                (query,)
+            ).fetchall()
         conn.close()
         return {"query": query, "results": [dict(r) for r in rows], "count": len(rows)}
     except Exception as e:
@@ -379,6 +405,14 @@ def _ingest_fragment(content: str, source: str = "user", tier: str = "B") -> str
         INSERT OR IGNORE INTO fragments (id, content, source, tier, embedding, ingested_at)
         VALUES (?,?,?,?,?,?)
     """, (fid, content[:4000], source, tier, json.dumps(vec), now))
+    # Also index into FTS5 for keyword search (Bible entries, project index, etc.)
+    try:
+        conn.execute(
+            "INSERT INTO fragments_fts(rowid, content, source, tier) VALUES ((SELECT id FROM fragments WHERE id=?),?,?,?)",
+            (fid, content[:4000], source, tier)
+        )
+    except Exception:
+        pass  # FTS table may not exist on fresh DB; created in _init_db
     conn.commit()
     conn.close()
     return fid
@@ -390,17 +424,24 @@ def _rag_search(query: str, top_k: int = 5) -> dict:
     rows = conn.execute("SELECT id, content, source, tier, embedding FROM fragments").fetchall()
     conn.close()
 
+    # Gap #13 fix: tier-boosted scoring ensures tier-A fragments surface first
+    # even when their raw cosine similarity is slightly lower than tier-B
+    TIER_BOOST = {"A": 0.08, "B": 0.0, "C": -0.04, "D": -0.08}
+
     results = []
     for row in rows:
         try:
             fv = json.loads(row["embedding"] or "[]")
             sim = _cosine(q_vec, fv)
+            boost = TIER_BOOST.get(row["tier"], 0.0)
+            boosted_score = min(1.0, max(-1.0, sim + boost))
             results.append({
                 "id": row["id"],
                 "content": row["content"][:500],
                 "source": row["source"],
                 "tier": row["tier"],
-                "score": round(sim, 4),
+                "score": round(boosted_score, 4),
+                "raw_sim": round(sim, 4),
             })
         except Exception:
             pass
@@ -442,6 +483,16 @@ def _brain_preload(task: str) -> dict:
         pass
 
     handoff = _read_handoff()
+    # Gap #5: pull Stenographer briefs into preload so agent has full context
+    steno_context: dict = {}
+    if HAS_BRIDGE:
+        steno_context = _bridge.read_steno_brief(limit=3)
+
+    # Gap #4: ensure a trace ID is active for this session
+    trace_id = ""
+    if HAS_BRIDGE:
+        trace_id = _bridge.get_or_create_trace()
+
     bundle = {
         "task": task,
         "rag_fragments": rag.get("fragments", []),
@@ -450,6 +501,8 @@ def _brain_preload(task: str) -> dict:
         "last_session_handoff": handoff or {},
         "handoff_present": bool(handoff),
         "session_id": _SESSION_ID,
+        "trace_id": trace_id,
+        "steno_context": steno_context,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     bundle_str = json.dumps({k: v for k, v in bundle.items() if k != "preload_hash"}, sort_keys=True)
@@ -519,6 +572,14 @@ def _cortex_steer(tool: str, args: dict, baseline_prompt: str) -> dict:
 
 def _write_handoff(task: str, summary: str, decisions: list,
                    files: list, next_steps: list, conversation_id: str) -> dict:
+    # Gap #7: include SSWP ecosystem health so next session knows codebase state
+    sswp_health: dict = {}
+    if HAS_BRIDGE:
+        sswp_health = _bridge.read_sswp_health(limit=3)
+
+    # Gap #4: include current trace ID
+    trace_id = _bridge.get_or_create_trace() if HAS_BRIDGE else ""
+
     record = {
         "conversation_id": conversation_id or _SESSION_ID,
         "task": task[:500],
@@ -528,11 +589,13 @@ def _write_handoff(task: str, summary: str, decisions: list,
         "next_steps": next_steps[:20],
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mcp_session_id": _SESSION_ID,
+        "trace_id": trace_id,
+        "sswp_ecosystem_health": sswp_health,
     }
     content = json.dumps(record, sort_keys=True)
     record["seal"] = hashlib.sha256(content.encode()).hexdigest()
     HANDOFF_FILE.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    _seal_event("handoff_written", {"task": task[:100]})
+    _seal_event("handoff_written", {"task": task[:100], "trace_id": trace_id})
     log.info(f"[omega-brain] Handoff sealed → {HANDOFF_FILE}")
     return record
 
@@ -898,13 +961,32 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
     if name == "veritas_run_pipeline":
         fail_fast = arguments.get("fail_fast", True)
         result = run_pipeline(claim_data, fail_fast=fail_fast)
+        final_verdict = result.get("final_verdict", "")
         # Auto-seal to SEAL ledger
         _seal_event("veritas_pipeline_run", {
             "claim_id": result.get("claim_id", "")[:32],
-            "verdict": result.get("final_verdict", ""),
+            "verdict": final_verdict,
             "regime": result.get("regime", ""),
             "seal": result.get("final_seal", "")[:32],
         })
+        # Gap #16: emit VIOLATION to shared event bus so Stenographer auto-ingests it as blocker
+        if final_verdict == "VIOLATION" and HAS_BRIDGE:
+            _bridge.emit_event("VERITAS_PIPELINE_VIOLATION", {
+                "claim_id": result.get("claim_id", "")[:32],
+                "halted_at": result.get("halted_at", ""),
+                "reasons": result.get("all_reasons", [])[:5],
+                "regime": result.get("regime", ""),
+                "session_id": _SESSION_ID,
+            }, source="omega-brain")
+        # Gap #8: expose adversarial risk in SEAL payload for cross-system use
+        adv_gate = next((g for g in result.get("gate_results", [])
+                         if g.get("gate") == "ADVERSARY"), None)
+        if adv_gate and HAS_BRIDGE:
+            _bridge.emit_event("VERITAS_ADVERSARY_GATE_RESULT", {
+                "verdict": adv_gate.get("verdict", ""),
+                "fragility": adv_gate.get("details", {}).get("fragility", 0),
+                "claim_id": result.get("claim_id", "")[:16],
+            }, source="omega-brain")
         return json.dumps(result, indent=2, default=str)
 
     if name == "veritas_compute_quality":
@@ -933,8 +1015,19 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
 
     if name == "veritas_claeg_transition":
         current = arguments.get("current_state", "")
-        target = arguments.get("target_state", "")
-        result = CLAEG.validate_transition(current, target)
+        target  = arguments.get("target_state", "")
+        result  = CLAEG.validate_transition(current, target)
+        # Gap #6: emit TERMINAL_SHUTDOWN to shared event bus so Stenographer can auto-ingest
+        if result.get("allowed") and target == "TERMINAL_SHUTDOWN" and HAS_BRIDGE:
+            _bridge.emit_event("CLAEG_TERMINAL_SHUTDOWN", {
+                "current_state": current,
+                "target_state": target,
+                "reason": result.get("reason", ""),
+                "session_id": _SESSION_ID,
+            }, source="omega-brain")
+            _bridge.update_claeg_state("TERMINAL_SHUTDOWN")
+        elif result.get("allowed") and HAS_BRIDGE:
+            _bridge.update_claeg_state(target)
         return json.dumps(result)
 
     if name == "veritas_nafe_scan":
@@ -1192,6 +1285,17 @@ if HAS_MCP:
                      "seal_entries (int), session_id (string), uptime_seconds (float), call_count (int)."
                  ),
                  inputSchema={"type": "object", "properties": {}}),
+            # Gap #14: unified ecosystem health tool
+            Tool(name="omega_ecosystem_status",
+                 description=(
+                     "Returns a unified health snapshot of ALL THREE VERITAS MCP systems: "
+                     "Omega Brain (vault, RAG, SEAL chain), SSWP (fleet attestation health, risk scores), "
+                     "and Omega Stenographer (briefs, milestones, uncompressed turns). "
+                     "Also shows the current shared trace ID, CLAEG state, and cross-system event log. "
+                     "Use this as the single source of truth for ecosystem health. "
+                     "Returns JSON with sections: omega_brain, sswp, stenographer, shared_trace, recent_events."
+                 ),
+                 inputSchema={"type": "object", "properties": {}}),
         ] + (_veritas_build_tools() if HAS_BUILD_GATES else [])
 
     @app.call_tool()
@@ -1393,6 +1497,43 @@ if HAS_MCP:
                     f"═══════════════════════════════════════════════════"
                 )
                 return [TextContent(type="text", text=report)]
+
+            elif name == "omega_ecosystem_status":
+                # Gap #14: unified health across all three systems
+                conn = _db()
+                session_count  = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+                entry_count    = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+                fragment_count = conn.execute("SELECT COUNT(*) FROM fragments").fetchone()[0]
+                ledger_count   = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
+                last_seal_row  = conn.execute(
+                    "SELECT hash, timestamp FROM ledger ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                conn.close()
+
+                brain_status = {
+                    "status": "ONLINE",
+                    "session_id": _SESSION_ID,
+                    "call_counter": _CALL_COUNTER,
+                    "vault_sessions": session_count,
+                    "vault_entries": entry_count,
+                    "rag_fragments": fragment_count,
+                    "seal_entries": ledger_count,
+                    "embedding_engine": _EMBED_ENGINE,
+                    "last_seal": (last_seal_row["hash"][:16] + "..." if last_seal_row else "none"),
+                    "last_seal_at": (last_seal_row["timestamp"] if last_seal_row else "never"),
+                }
+
+                if HAS_BRIDGE:
+                    eco = _bridge.ecosystem_summary()
+                    eco["omega_brain"] = brain_status
+                    return [TextContent(type="text", text=json.dumps(eco, indent=2, default=str))]
+                else:
+                    return [TextContent(type="text", text=json.dumps({
+                        "omega_brain": brain_status,
+                        "sswp": {"available": False, "reason": "veritas_bridge not loaded"},
+                        "stenographer": {"available": False, "reason": "veritas_bridge not loaded"},
+                        "shared_trace": {"trace_id": "BRIDGE_UNAVAILABLE"},
+                    }, indent=2))]
 
             elif name == "omega_brain_status":
                 conn = _db()
