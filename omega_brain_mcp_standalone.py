@@ -324,25 +324,30 @@ def _vault_log_session(session_id: str, task: str, decisions: list, files: list)
     return {"logged": True, "session_id": sid, "seal_hash": seal[:16]}
 
 def _vault_search(query: str) -> dict:
-    """FTS keyword search over vault entries (chat) OR provenance fragments (Bible/projects)."""
+    """FTS keyword search over vault entries (chat) AND provenance fragments (Bible/projects)."""
     if not query:
         return {"results": [], "count": 0}
     try:
         conn = _db()
-        # Try fragments FTS first (Bible entries, project index, etc.)
+        rows = []
+        # Search provenance fragments FTS (Bible entries, project index, etc.)
         try:
-            rows = conn.execute(
+            rows += list(conn.execute(
                 "SELECT content, source as title, tier FROM fragments_fts WHERE fragments_fts MATCH ? LIMIT 20",
                 (query,)
-            ).fetchall()
+            ).fetchall())
         except Exception:
-            # Fallback to entries FTS (chat history)
-            rows = conn.execute(
-                "SELECT content, session_id as title, tier FROM entries_fts WHERE entries_fts MATCH ? LIMIT 20",
+            pass
+        # Always search vault entries FTS (chat history, decisions) as well
+        try:
+            rows += list(conn.execute(
+                "SELECT content, session_id as title, NULL as tier FROM entries_fts WHERE entries_fts MATCH ? LIMIT 20",
                 (query,)
-            ).fetchall()
+            ).fetchall())
+        except Exception:
+            pass
         conn.close()
-        return {"query": query, "results": [dict(r) for r in rows], "count": len(rows)}
+        return {"query": query, "results": [dict(r) for r in rows[:20]], "count": len(rows[:20])}
     except Exception as e:
         return {"query": query, "results": [], "count": 0, "error": str(e)}
 
