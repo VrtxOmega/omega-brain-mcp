@@ -70,6 +70,16 @@ except Exception:
     print(0)
 PY
 )"
+elif [[ -f "$INBOX_DIR/watch-state.json" ]]; then
+  since_id="$(python3 - "$INBOX_DIR/watch-state.json" <<'PY'
+import json, pathlib, sys
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    print(int(data.get("watermark") or 0))
+except Exception:
+    print(0)
+PY
+)"
 fi
 
 drain_args=(omsg-drain "$agent" --since "$since_id" --json)
@@ -77,14 +87,18 @@ if [[ "$mark_read" == true ]]; then
   drain_args+=(--mark-read)
 fi
 
-response="$("${drain_args[@]}" 2>/dev/null || echo '{"messages":[],"count":0,"watermark":0,"since_id":0}')"
+response_file="$(mktemp)"
+trap 'rm -f "$response_file"' EXIT
+if ! "${drain_args[@]}" >"$response_file" 2>/dev/null; then
+  printf '%s\n' '{"messages":[],"count":0,"watermark":0,"since_id":0}' >"$response_file"
+fi
 
-summary="$(python3 - "$STATE_PATH" "$agent" "$DATA_DIR" <<PY
+summary="$(python3 - "$STATE_PATH" "$agent" "$DATA_DIR" "$since_id" "$response_file" <<'PY'
 import json, pathlib, sys
 from datetime import datetime, timezone
 
-state_path, agent, data_dir = sys.argv[1:4]
-raw = """${response}"""
+state_path, agent, data_dir, since_id, response_path = sys.argv[1:6]
+raw = pathlib.Path(response_path).read_text(encoding="utf-8")
 try:
     payload = json.loads(raw) if raw.strip() else {}
 except Exception:
@@ -101,13 +115,13 @@ if watermark > 0:
         "drained_at": datetime.now(timezone.utc).isoformat(),
     }, indent=2) + "\n")
 
-# Clear operator attention when drained
 att_path = pathlib.Path(data_dir) / "operator" / "attention.json"
 if att_path.exists():
     try:
         att = json.loads(att_path.read_text())
         entry = att.setdefault("agents", {}).setdefault(agent, {})
         entry["needs_drain"] = count > 0
+        entry["pending"] = 0 if count == 0 else max(int(entry.get("pending") or 0), count)
         entry["last_drained_at"] = datetime.now(timezone.utc).isoformat()
         entry["drain_watermark"] = watermark
         att["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -117,7 +131,7 @@ if att_path.exists():
 
 out = {
     "agent": agent,
-    "since_id": int(payload.get("since_id") or 0),
+    "since_id": int(payload.get("since_id") or since_id or 0),
     "watermark": watermark,
     "new_message_count": count,
     "messages": messages,

@@ -95,7 +95,14 @@ omsg-must-drain grok --json    # Grok
 omsg-must-drain codex --json   # Codex
 ```
 
-If `must_reply: true`, handle messages before any other work. Grok skill: `~/.grok/skills/omega-agent-bus/SKILL.md`.
+If `must_reply: true`, handle messages before any other work.
+
+| Agent | Mandatory skill | Drain command |
+|-------|-----------------|---------------|
+| Grok | `~/.grok/skills/omega-agent-bus/SKILL.md` | `omsg-must-drain grok --json` |
+| Codex | `~/.codex/skills/omega-agent-bus/SKILL.md` | `omsg-must-drain codex --json` |
+
+Both agents also need `omsg-watch@<agent>` + `AGENTS.md` drain rule. Codex send helper: `~/.codex/skills/omega-brain-v2-inbox/scripts/omega-brain-inbox.sh`.
 
 ### Enable operator
 
