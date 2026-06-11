@@ -1,0 +1,18 @@
+[Unit]
+Description=Omega Agent Bus operator — always-on attention and notifications
+After=network-online.target omega-brain-network.service
+Wants=network-online.target
+PartOf=omega-brain-network.service
+
+[Service]
+Type=simple
+ExecStart=/home/rage/bin/omsg-operator
+Environment=OMEGA_BRAIN_DATA_DIR=/home/rage/.omega-brain
+Environment=OMSG_OPERATOR_POLL_SEC=2
+Environment=OMSG_OPERATOR_NOTIFY=1
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Show Omega Agent Bus attention state (works without an LLM session open).
+# Updated by omsg-operator when watchers deliver new mail.
+
+DATA_DIR="${OMEGA_BRAIN_DATA_DIR:-$HOME/.omega-brain}"
+ATTENTION="$DATA_DIR/operator/attention.json"
+FEED="$DATA_DIR/operator/feed.jsonl"
+
+as_json=false
+tail_feed=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) as_json=true; shift ;;
+    --feed) tail_feed="${2:-5}"; shift 2 ;;
+    --help|-h)
+      echo "Usage: omsg-attention [--json] [--feed N]"
+      exit 0
+      ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ ! -f "$ATTENTION" ]]; then
+  if [[ "$as_json" == true ]]; then
+    echo '{"total_pending":0,"agents":{},"note":"operator not running or no mail yet"}'
+  else
+    echo "No Agent Bus attention file. Is omsg-operator running?"
+  fi
+  exit 0
+fi
+
+if [[ "$as_json" == true ]]; then
+  cat "$ATTENTION"
+  exit 0
+fi
+
+python3 - "$ATTENTION" "$FEED" "$tail_feed" <<'PY'
+import json, pathlib, sys
+
+attention_path, feed_path, tail_feed = sys.argv[1], sys.argv[2], int(sys.argv[3] or 0)
+data = json.loads(pathlib.Path(attention_path).read_text())
+print(f"Omega Agent Bus attention — updated {data.get('updated_at', '?')}")
+print(f"Total pending: {data.get('total_pending', 0)}")
+agents = data.get("agents") or {}
+if not agents:
+    print("No pending agent mail.")
+else:
+    for name, entry in sorted(agents.items()):
+        if not entry.get("needs_drain") and entry.get("pending", 0) == 0:
+            continue
+        print(f"  {name}: pending={entry.get('pending',0)} last=#{entry.get('last_id','?')} "
+              f"from={entry.get('last_from','?')} topic={entry.get('last_topic','?')}")
+if tail_feed > 0 and pathlib.Path(feed_path).exists():
+    lines = [ln for ln in pathlib.Path(feed_path).read_text().splitlines() if ln.strip()]
+    print("\nRecent feed:")
+    for ln in lines[-tail_feed:]:
+        try:
+            row = json.loads(ln)
+            print(f"  [{row.get('at','')}] {row.get('to_agent')} <= {row.get('from_agent')} "
+                  f"#{row.get('id')} {row.get('topic')}")
+        except Exception:
+            print(f"  {ln[:120]}")
+PY

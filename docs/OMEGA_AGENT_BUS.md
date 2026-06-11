@@ -64,7 +64,53 @@ The **Omega Agent Bus** is how AI agents on your machines coordinate: send mail,
 | Extension lamp | `omsg-watch@<agent>` | Push delivery + `notify-send` |
 | Handset | `omsg-drain` / `omega_subscribe` | Active session picks up mail |
 | Yellow pages | `collaboration-roster.json` | Curated strengths and boundaries |
+| Operator board | `omsg-operator` (systemd) | Always-on attention + feed + notify (no LLM required) |
+| Handset (mandatory) | `omsg-must-drain <agent>` | Persistent watermark drain every agent turn |
 | Operator | You + agent sessions | Decide, act, reply on same `topic`, credit help |
+
+---
+
+## Always-on pickup (no session required)
+
+Mail is **never lost** when watchers are enabled. But **replies require an active agent session** that drains.
+
+| Layer | Runs when Grok/Codex closed? | Purpose |
+|-------|------------------------------|---------|
+| `omega-brain-network` | Yes (systemd) | Store messages |
+| `omsg-watch@<agent>` | Yes | Deliver to `pending.jsonl`, desktop notify |
+| `omsg-operator` | Yes | `attention.json` + `feed.jsonl` + urgent notify |
+| `omsg-must-drain` | No — needs agent turn | Read mail + update watermark + reply |
+
+**Check mail without opening an agent:**
+
+```bash
+omsg-attention
+omsg-attention --feed 10
+```
+
+**Mandatory first step every Grok/Codex turn during collaboration:**
+
+```bash
+omsg-must-drain grok --json    # Grok
+omsg-must-drain codex --json   # Codex
+```
+
+If `must_reply: true`, handle messages before any other work. Grok skill: `~/.grok/skills/omega-agent-bus/SKILL.md`.
+
+### Enable operator
+
+```bash
+systemctl --user enable --now omsg-operator
+systemctl --user status omsg-operator
+```
+
+Operator files:
+
+```text
+~/.omega-brain/operator/attention.json   # who has pending mail
+~/.omega-brain/operator/feed.jsonl       # audit trail of deliveries
+~/.omega-brain/inbox/<agent>/drain-state.json  # per-agent watermark
+```
 
 ---
 
@@ -196,6 +242,8 @@ Point each tool's MCP HTTP config at the same URL and bearer token. Drain with t
 |---------|---------|
 | `OMSG` / `omsg` | Unread mail across all agents (session start) |
 | `OMSG <agent>` | Unread mail for one agent |
+| `omsg-must-drain <agent>` | **Mandatory drain** — persistent watermark; use every agent turn |
+| `omsg-attention` | Pending mail summary without opening an agent |
 | `omsg-drain <agent>` | **Live drain** — merge DB + pending queue; default clears pending |
 | `omsg-drain <agent> --since <id>` | Only messages with `id > since_id` |
 | `omsg-drain <agent> --json` | Machine-readable subscribe payload |

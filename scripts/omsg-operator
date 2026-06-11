@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Omega Agent Bus operator — always-on attention layer.
+
+Watches all agent inbox signal files. When watchers deliver mail, this process:
+- appends to ~/.omega-brain/operator/feed.jsonl
+- updates ~/.omega-brain/operator/attention.json
+- sends desktop notifications (notify-send)
+
+LLM sessions are not required for pickup. Sessions use omsg-must-drain to act.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+DATA_DIR = Path(os.environ.get("OMEGA_BRAIN_DATA_DIR", Path.home() / ".omega-brain"))
+INBOX_ROOT = DATA_DIR / "inbox"
+OPERATOR_DIR = DATA_DIR / "operator"
+FEED_PATH = OPERATOR_DIR / "feed.jsonl"
+ATTENTION_PATH = OPERATOR_DIR / "attention.json"
+ROSTER_PATH = DATA_DIR / "collaboration-roster.json"
+POLL_SEC = float(os.environ.get("OMSG_OPERATOR_POLL_SEC", "2"))
+NOTIFY = os.environ.get("OMSG_OPERATOR_NOTIFY", "1").strip() != "0"
+
+DEFAULT_AGENTS = ["grok", "codex", "hermes", "devin", "antigravity", "cascade"]
+
+
+def log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    print(f"[omsg-operator] {ts} {msg}", flush=True)
+
+
+def load_agents() -> list[str]:
+    if ROSTER_PATH.exists():
+        try:
+            data = json.loads(ROSTER_PATH.read_text())
+            names = data.get("bus", {}).get("canonicalAgentNames")
+            if isinstance(names, list) and names:
+                return [str(n) for n in names]
+        except Exception:
+            pass
+    return DEFAULT_AGENTS
+
+
+def load_attention() -> dict:
+    if ATTENTION_PATH.exists():
+        try:
+            return json.loads(ATTENTION_PATH.read_text())
+        except Exception:
+            pass
+    return {"updated_at": "", "total_pending": 0, "agents": {}}
+
+
+def save_attention(data: dict) -> None:
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    data["total_pending"] = sum(
+        int((data.get("agents") or {}).get(a, {}).get("pending", 0) or 0)
+        for a in (data.get("agents") or {})
+    )
+    ATTENTION_PATH.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def read_pending(agent: str) -> list[dict]:
+    path = INBOX_ROOT / agent / "pending.jsonl"
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+    return rows
+
+
+def load_operator_state() -> dict:
+    state_path = OPERATOR_DIR / "state.json"
+    if state_path.exists():
+        try:
+            return json.loads(state_path.read_text())
+        except Exception:
+            pass
+    return {"notified_ids": {}}
+
+
+def save_operator_state(state: dict) -> None:
+    (OPERATOR_DIR / "state.json").write_text(json.dumps(state, indent=2) + "\n")
+
+
+def maybe_notify(agent: str, message: dict) -> None:
+    if not NOTIFY:
+        return
+    if os.environ.get("DISPLAY", "") == "" and os.environ.get("WAYLAND_DISPLAY", "") == "":
+        return
+    topic = message.get("topic") or "message"
+    sender = message.get("from_agent") or "unknown"
+    body = (message.get("body") or "").strip().replace("\n", " ")
+    if len(body) > 160:
+        body = body[:157] + "..."
+    priority = message.get("priority") or "normal"
+    urgency = "critical" if priority in ("high", "urgent") else "normal"
+    try:
+        os.spawnlp(
+            os.P_NOWAIT,
+            "notify-send",
+            "notify-send",
+            f"Agent Bus → {agent}",
+            f"{sender} · {topic}\n{body}",
+            "-u",
+            urgency,
+            "-a",
+            "omega-agent-bus",
+        )
+    except Exception:
+        pass
+
+
+def process_agent(agent: str, attention: dict, op_state: dict) -> bool:
+    changed = False
+    pending = read_pending(agent)
+    notified: set[int] = set(int(x) for x in (op_state.get("notified_ids", {}).get(agent) or []))
+    agents_map = attention.setdefault("agents", {})
+    entry = agents_map.setdefault(agent, {})
+    new_for_agent = [m for m in pending if int(m.get("id") or 0) not in notified]
+
+    if not new_for_agent and not pending:
+        entry.update({"pending": 0, "needs_drain": False})
+        return False
+
+    entry["pending"] = len(pending)
+    entry["needs_drain"] = len(pending) > 0
+    if pending:
+        last = max(pending, key=lambda m: int(m.get("id") or 0))
+        entry["last_id"] = int(last.get("id") or 0)
+        entry["last_from"] = last.get("from_agent")
+        entry["last_topic"] = last.get("topic")
+        entry["last_at"] = last.get("created_at")
+
+    for message in sorted(new_for_agent, key=lambda m: int(m.get("id") or 0)):
+        mid = int(message.get("id") or 0)
+        if mid <= 0:
+            continue
+        notified.add(mid)
+        feed_row = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "to_agent": agent,
+            "from_agent": message.get("from_agent"),
+            "id": mid,
+            "topic": message.get("topic"),
+            "priority": message.get("priority"),
+            "body_preview": (message.get("body") or "")[:240],
+        }
+        with FEED_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(feed_row, ensure_ascii=False) + "\n")
+        maybe_notify(agent, message)
+        log(f"attention id={mid} to={agent} from={message.get('from_agent')} topic={message.get('topic')}")
+        changed = True
+
+    op_state.setdefault("notified_ids", {})[agent] = sorted(notified)[-500:]
+    return changed
+
+
+def main() -> int:
+    OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
+    INBOX_ROOT.mkdir(parents=True, exist_ok=True)
+    agents = load_agents()
+    log(f"watching {len(agents)} agents under {INBOX_ROOT}")
+
+    op_state = load_operator_state()
+    while True:
+        attention = load_attention()
+        any_change = False
+        for agent in agents:
+            (INBOX_ROOT / agent).mkdir(parents=True, exist_ok=True)
+            if process_agent(agent, attention, op_state):
+                any_change = True
+        if any_change:
+            save_attention(attention)
+            save_operator_state(op_state)
+        time.sleep(POLL_SEC)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        log("stopped")
+        raise SystemExit(0)

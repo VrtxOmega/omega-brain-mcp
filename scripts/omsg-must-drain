@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Mandatory Agent Bus drain with persistent watermark.
+# Agents MUST run this before replying when the omega-agent-bus skill applies.
+
+normalize_agent() {
+  local raw="${1,,}"
+  case "$raw" in
+    anti-gravity|anti_gravity|"anti gravity") echo antigravity ;;
+    windsurf|windswift) echo devin ;;
+    *) echo "$raw" ;;
+  esac
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  omsg-must-drain <agent> [--json] [--mark-read] [--quiet]
+
+Reads saved watermark, drains Omega Agent Bus mail for <agent>, saves new watermark.
+JSON output includes must_reply=true when new messages need agent handling.
+
+State: ~/.omega-brain/inbox/<agent>/drain-state.json
+USAGE
+}
+
+agent=""
+want_json=false
+mark_read=false
+quiet=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) want_json=true; shift ;;
+    --mark-read) mark_read=true; shift ;;
+    --quiet) quiet=true; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+      if [[ -z "$agent" ]]; then
+        agent="$(normalize_agent "$1")"
+        shift
+      else
+        echo "Unknown arg: $1" >&2
+        usage
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$agent" ]]; then
+  usage
+  exit 2
+fi
+
+DATA_DIR="${OMEGA_BRAIN_DATA_DIR:-$HOME/.omega-brain}"
+INBOX_DIR="$DATA_DIR/inbox/$agent"
+STATE_PATH="$INBOX_DIR/drain-state.json"
+mkdir -p "$INBOX_DIR"
+
+since_id=0
+if [[ -f "$STATE_PATH" ]]; then
+  since_id="$(python3 - "$STATE_PATH" <<'PY'
+import json, pathlib, sys
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    print(int(data.get("watermark") or 0))
+except Exception:
+    print(0)
+PY
+)"
+fi
+
+drain_args=(omsg-drain "$agent" --since "$since_id" --json)
+if [[ "$mark_read" == true ]]; then
+  drain_args+=(--mark-read)
+fi
+
+response="$("${drain_args[@]}" 2>/dev/null || echo '{"messages":[],"count":0,"watermark":0,"since_id":0}')"
+
+summary="$(python3 - "$STATE_PATH" "$agent" "$DATA_DIR" <<PY
+import json, pathlib, sys
+from datetime import datetime, timezone
+
+state_path, agent, data_dir = sys.argv[1:4]
+raw = """${response}"""
+try:
+    payload = json.loads(raw) if raw.strip() else {}
+except Exception:
+    payload = {"error": "invalid drain response", "raw": raw[:500]}
+
+messages = payload.get("messages") or []
+watermark = int(payload.get("watermark") or 0)
+count = int(payload.get("count") or len(messages))
+
+if watermark > 0:
+    pathlib.Path(state_path).write_text(json.dumps({
+        "agent": agent,
+        "watermark": watermark,
+        "drained_at": datetime.now(timezone.utc).isoformat(),
+    }, indent=2) + "\n")
+
+# Clear operator attention when drained
+att_path = pathlib.Path(data_dir) / "operator" / "attention.json"
+if att_path.exists():
+    try:
+        att = json.loads(att_path.read_text())
+        entry = att.setdefault("agents", {}).setdefault(agent, {})
+        entry["needs_drain"] = count > 0
+        entry["last_drained_at"] = datetime.now(timezone.utc).isoformat()
+        entry["drain_watermark"] = watermark
+        att["updated_at"] = datetime.now(timezone.utc).isoformat()
+        att_path.write_text(json.dumps(att, indent=2) + "\n")
+    except Exception:
+        pass
+
+out = {
+    "agent": agent,
+    "since_id": int(payload.get("since_id") or 0),
+    "watermark": watermark,
+    "new_message_count": count,
+    "messages": messages,
+    "must_reply": count > 0,
+    "drain_state": state_path,
+}
+print(json.dumps(out, indent=2))
+PY
+)"
+
+if [[ "$quiet" != true ]]; then
+  if [[ "$want_json" == true ]]; then
+    printf '%s\n' "$summary"
+  else
+    printf '%s\n' "$summary" | python3 - <<'PY'
+import json, sys
+data = json.load(sys.stdin)
+if data.get("new_message_count", 0) == 0:
+    print(f"No new Agent Bus mail for {data.get('agent')} since watermark {data.get('since_id')}.")
+    raise SystemExit(0)
+for m in data.get("messages", []):
+    print(f"[{m.get('created_at','')}] {m.get('from_agent','?')} -> {data.get('agent')} :: {m.get('topic','')}")
+    print(m.get("body", ""))
+    print()
+print(f"watermark={data.get('watermark')} must_reply={data.get('must_reply')}")
+PY
+  fi
+fi
+
+exit 0
