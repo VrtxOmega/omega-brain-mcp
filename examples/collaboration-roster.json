@@ -1,9 +1,8 @@
 {
   "version": "2026-06-11",
-  "product": "Omega Agent Bus",
   "bus": {
     "name": "omega-brain-network",
-    "url": "http://127.0.0.1:7700/mcp",
+    "url": "http://100.65.218.30:7700/mcp",
     "canonicalAgentNames": [
       "grok",
       "codex",
@@ -102,7 +101,7 @@
       "notDefaultOwnerOf": [
         "narrow file edits unless tasked"
       ],
-      "drainCommand": "omsg-drain hermes --json"
+      "drainCommand": "omsg-must-drain hermes --json"
     },
     "devin": {
       "aliases": [

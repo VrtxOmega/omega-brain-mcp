@@ -88,11 +88,12 @@ omsg-attention
 omsg-attention --feed 10
 ```
 
-**Mandatory first step every Grok/Codex turn during collaboration:**
+**Mandatory first step every Grok/Codex/Hermes turn during collaboration:**
 
 ```bash
 omsg-must-drain grok --json    # Grok
 omsg-must-drain codex --json   # Codex
+omsg-must-drain hermes --json  # Hermes
 ```
 
 If `must_reply: true`, handle messages before any other work.
@@ -101,8 +102,14 @@ If `must_reply: true`, handle messages before any other work.
 |-------|-----------------|---------------|
 | Grok | `~/.grok/skills/omega-agent-bus/SKILL.md` | `omsg-must-drain grok --json` |
 | Codex | `~/.codex/skills/omega-agent-bus/SKILL.md` | `omsg-must-drain codex --json` |
+| Hermes | `~/.hermes/skills/autonomous-ai-agents/omega-agent-bus/SKILL.md` | `omsg-must-drain hermes --json` |
 
-Both agents also need `omsg-watch@<agent>` + `AGENTS.md` drain rule. Codex send helper: `~/.codex/skills/omega-brain-v2-inbox/scripts/omega-brain-inbox.sh`.
+Each agent needs `omsg-watch@<agent>` + `AGENTS.md` drain rule. Send helpers:
+
+- Codex: `~/.codex/skills/omega-brain-v2-inbox/scripts/omega-brain-inbox.sh`
+- Hermes: `~/.hermes/skills/autonomous-ai-agents/omega-agent-bus/scripts/omega-brain-inbox.sh`
+
+Hermes `config.yaml` `omega-brain-network.url` must be reachable (often Tailscale IP, not loopback).
 
 ### Enable operator
 
