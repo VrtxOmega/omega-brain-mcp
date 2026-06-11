@@ -1,0 +1,17 @@
+[Unit]
+Description=OMSG live watcher for %i
+After=network-online.target omega-brain-network.service
+Wants=network-online.target
+PartOf=omega-brain-network.service
+
+[Service]
+Type=simple
+ExecStart=/home/rage/bin/omsg-watch %i
+Environment=OMSG_WATCH_HEARTBEAT_SEC=60
+Environment=OMSG_WATCH_NOTIFY=1
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=OmegaBrain Network MCP Server — Unified Vault API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/rage/mcp-servers/omega-brain/.venv/bin/python /home/rage/mcp-servers/omega-brain/omega_brain_network.py
+WorkingDirectory=/home/rage/mcp-servers/omega-brain
+Environment="OMEGA_BRAIN_DATA_DIR=/home/rage/.omega-brain"
+Environment="OMEGA_BRAIN_PORT=7700"
+Environment="OMEGA_BRAIN_HOST=100.65.218.30"
+Environment="OMEGA_BACKFILL_ENABLED=0"
+Environment="OMEGA_BACKFILL_SLEEP_SEC=2.0"
+Environment="OMEGA_BACKFILL_BATCH=16"
+Nice=15
+CPUQuota=60%
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

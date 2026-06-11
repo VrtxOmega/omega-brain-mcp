@@ -1,0 +1,158 @@
+{
+  "version": "2026-06-11",
+  "product": "Omega Agent Bus",
+  "bus": {
+    "name": "omega-brain-network",
+    "url": "http://127.0.0.1:7700/mcp",
+    "canonicalAgentNames": [
+      "grok",
+      "codex",
+      "hermes",
+      "devin",
+      "antigravity",
+      "cascade"
+    ]
+  },
+  "doctrine": {
+    "operatorMeaning": "Watchers deliver messages; active agent sessions decide, act, reply, and credit useful input.",
+    "sessionStart": [
+      "Check omega_agents or /api/agents when available.",
+      "Drain the current agent inbox before state-changing work.",
+      "Read this roster before inviting collaborators."
+    ],
+    "collaborationTriggers": [
+      "blocker: cannot proceed safely without another agent or human input",
+      "opportunity: another agent's strength would improve quality before commit, deployment, or public action",
+      "integration: acknowledge useful input and state what was accepted, revised, or deferred"
+    ],
+    "messageShape": [
+      "topic",
+      "objective",
+      "my-slice",
+      "invite",
+      "boundaries",
+      "artifact",
+      "credit"
+    ],
+    "hardBoundaries": [
+      "No public GitHub writes without explicit user approval.",
+      "No silent overlap on another agent's declared write scope.",
+      "State ACCEPT, REVISE, or DEFER when reviewing another agent's slice.",
+      "Credit useful input in replies and closeouts."
+    ]
+  },
+  "agents": {
+    "grok": {
+      "aliases": [],
+      "capabilities": [
+        "review",
+        "scout",
+        "audit",
+        "coordination",
+        "mcp-verify",
+        "docs-polish"
+      ],
+      "defaultSlices": [
+        "second-eyes review",
+        "gap analysis",
+        "MCP doctor verification",
+        "cross-repo read"
+      ],
+      "notDefaultOwnerOf": [
+        "implementation commits unless write scope is explicitly split"
+      ],
+      "drainCommand": "omsg-drain grok --json"
+    },
+    "codex": {
+      "aliases": [],
+      "capabilities": [
+        "implement",
+        "test",
+        "pcf-gates",
+        "oss-lanes",
+        "verification",
+        "commit-ready-slices"
+      ],
+      "defaultSlices": [
+        "code changes",
+        "tests",
+        "evidence bundles",
+        "diff review",
+        "SEND discipline"
+      ],
+      "notDefaultOwnerOf": [
+        "global config changes or public GitHub writes without approval"
+      ],
+      "drainCommand": "omsg-drain codex --json"
+    },
+    "hermes": {
+      "aliases": [],
+      "capabilities": [
+        "orchestrate",
+        "kanban",
+        "delegate",
+        "long-running-workflows",
+        "task-queues"
+      ],
+      "defaultSlices": [
+        "multi-step routing",
+        "workstream coordination",
+        "task queue structure"
+      ],
+      "notDefaultOwnerOf": [
+        "narrow file edits unless tasked"
+      ],
+      "drainCommand": "omsg-drain hermes --json"
+    },
+    "devin": {
+      "aliases": [
+        "windsurf",
+        "windswift"
+      ],
+      "capabilities": [
+        "ide-coding",
+        "same-machine-implementation"
+      ],
+      "defaultSlices": [
+        "same-repo IDE implementation when active"
+      ],
+      "notDefaultOwnerOf": [
+        "cross-agent policy without drain"
+      ],
+      "drainCommand": "omsg-drain devin --json"
+    },
+    "antigravity": {
+      "aliases": [
+        "anti-gravity"
+      ],
+      "capabilities": [
+        "research",
+        "explore",
+        "alternate-design-pass"
+      ],
+      "defaultSlices": [
+        "fresh approach review",
+        "design exploration"
+      ],
+      "notDefaultOwnerOf": [
+        "production commits"
+      ],
+      "drainCommand": "omsg-drain antigravity --json"
+    },
+    "cascade": {
+      "aliases": [],
+      "capabilities": [
+        "automation",
+        "fill-in",
+        "secondary-execution"
+      ],
+      "defaultSlices": [
+        "fill-in tasks when primary agents are loaded"
+      ],
+      "notDefaultOwnerOf": [
+        "gate ownership"
+      ],
+      "drainCommand": "omsg-drain cascade --json"
+    }
+  }
+}

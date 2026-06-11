@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.2.0 — 2026-06-11
+
+### Added — Omega Agent Bus
+
+- `omega_brain_network.py` — HTTP/SSE network MCP server (port 7700): shared vault API, cross-agent message bus, task queue, live subscribe/SSE delivery.
+- **Omega Agent Bus** documentation: `docs/OMEGA_AGENT_BUS.md` — collaboration protocol, OMSG CLI, watchers, roster, MCP wiring, troubleshooting.
+- `examples/collaboration-roster.json` — human-curated agent capability template.
+- `scripts/omsg-watch`, `scripts/omsg-drain` — live inbox watcher and active-session drain helpers.
+- `examples/systemd/` — `omega-brain-network.service` and `omsg-watch@.service` unit templates.
+- Network MCP tools: `omega_send`, `omega_inbox`, `omega_subscribe`, `omega_agents`, `omega_post_task`, `omega_claim_task`, `omega_complete_task`, `omega_tasks`.
+- REST endpoints: `/api/send`, `/api/inbox`, `/api/subscribe`, `/api/agents`, `/events` (SSE).
+
+### Changed
+
+- README: document three-layer naming (Omega Brain Network · Omega Agent Bus · PCF MCP).
+
 ## v2.1.1 — 2026-04-14
 
 ### Changed

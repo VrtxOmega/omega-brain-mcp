@@ -29,6 +29,7 @@ Omega Brain MCP is the governing cognitive substrate of the **VERITAS & Sovereig
 ## Table of Contents
 
 - [Overview](#overview)
+- [Omega Agent Bus](#omega-agent-bus)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
@@ -63,6 +64,18 @@ Omega Brain MCP is a self-contained **Model Context Protocol (MCP) server** that
 Two Python files. One pip dependency. Zero external services.
 
 Compatible clients: Claude Desktop, VS Code Copilot, Cursor, Windsurf, AutoGen, LangChain, CrewAI, LlamaIndex, and any MCP-compliant host.
+
+### Omega Agent Bus
+
+**Omega Brain Network** is the MCP server and vault. **Omega Agent Bus** is the cross-agent collaboration layer on top of it — mail, live drain, watchers, roster, and task queue. **PCF MCP** is a separate stdio server for contribution gates.
+
+| Layer | Name | Doc |
+|-------|------|-----|
+| Vault + HTTP MCP | Omega Brain Network | This README |
+| Agent collaboration | **Omega Agent Bus** (OMSG) | [docs/OMEGA_AGENT_BUS.md](docs/OMEGA_AGENT_BUS.md) |
+| Contribution gates | PCF MCP | [premature-contribution-firewall/docs/MCP.md](https://github.com/VrtxOmega/premature-contribution-firewall/blob/main/docs/MCP.md) |
+
+Quick start: enable `omega-brain-network.service`, copy `examples/collaboration-roster.json` to `~/.omega-brain/collaboration-roster.json`, enable `omsg-watch@<agent>`, drain with `omsg-drain <agent> --json` during active work.
 
 ### What It Is Not
 

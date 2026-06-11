@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Live Omega Brain inbox watcher for one agent.
+# - Holds SSE /events open for push delivery
+# - Heartbeats presence via /api/agents
+# - Writes pending.jsonl + signal file (belt-and-suspenders with server-side queue)
+# - Optional desktop notification via notify-send
+
+SKILL_HELPER=/home/rage/.codex/skills/omega-brain-v2-inbox/scripts/omega-brain-inbox.sh
+DATA_DIR="${OMEGA_BRAIN_DATA_DIR:-$HOME/.omega-brain}"
+HEARTBEAT_SEC="${OMSG_WATCH_HEARTBEAT_SEC:-60}"
+NOTIFY="${OMSG_WATCH_NOTIFY:-1}"
+
+normalize_agent() {
+  local raw="${1,,}"
+  case "$raw" in
+    anti-gravity|anti_gravity|"anti gravity") echo antigravity ;;
+    windsurf|windswift) echo devin ;;
+    *) echo "$raw" ;;
+  esac
+}
+
+usage() {
+  cat <<USAGE
+Usage: omsg-watch <agent>
+
+Watches Omega Brain SSE /events for one agent and keeps live inbox signals fresh.
+
+Environment:
+  OMEGA_BASE_URL              Omega Brain base URL (auto-detected if unset)
+  OMEGA_BRAIN_DATA_DIR        Pending inbox root (default: ~/.omega-brain)
+  OMSG_WATCH_HEARTBEAT_SEC    Presence heartbeat interval (default: 60)
+  OMSG_WATCH_NOTIFY           1 = notify-send on new messages (default: 1)
+
+Examples:
+  omsg-watch codex
+  omsg-watch grok
+USAGE
+}
+
+agent="${1:-}"
+if [[ -z "$agent" || "$agent" == "--help" || "$agent" == "-h" ]]; then
+  usage
+  exit 0
+fi
+agent="$(normalize_agent "$agent")"
+
+if [[ ! -x "$SKILL_HELPER" ]]; then
+  echo "omega-brain-inbox helper missing: $SKILL_HELPER" >&2
+  exit 1
+fi
+
+TOKEN="${OMEGA_BRAIN_TOKEN:-}"
+if [[ -z "$TOKEN" ]]; then
+  mapfile -t token_rows < <(python3 - "$agent" <<'PY'
+import json, pathlib, sys
+agent = sys.argv[1]
+data = json.loads(pathlib.Path.home().joinpath('.omega-brain/agent_tokens.json').read_text())
+for token, name in data.items():
+    if name == agent:
+        print(token)
+        break
+PY
+)
+  TOKEN="${token_rows[0]:-}"
+fi
+if [[ -z "$TOKEN" && -f "$DATA_DIR/network.token" ]]; then
+  TOKEN="$(cat "$DATA_DIR/network.token")"
+fi
+if [[ -z "$TOKEN" ]]; then
+  echo "Missing token for agent $agent" >&2
+  exit 1
+fi
+
+BASE_URL="${OMEGA_BASE_URL:-}"
+if [[ -z "$BASE_URL" ]]; then
+  BASE_URL="$(python3 - <<'PY'
+import socket, subprocess
+candidates = ["http://127.0.0.1:7700", "http://100.65.218.30:7700"]
+try:
+    out = subprocess.check_output(["ss", "-H", "-ltn"], text=True, stderr=subprocess.DEVNULL)
+    for line in out.splitlines():
+        if ":7700" not in line:
+            continue
+        addr = line.split()[-1]
+        host = addr.rsplit(":", 1)[0]
+        host = host.strip("[]")
+        if host not in ("0.0.0.0", "::", "*") and host not in candidates:
+            candidates.insert(0, f"http://{host}:7700")
+except Exception:
+    pass
+for url in candidates:
+    try:
+        with socket.create_connection((url.split("//",1)[1].split(":")[0], 7700), timeout=1):
+            print(url)
+            break
+    except Exception:
+        continue
+else:
+    print("http://100.65.218.30:7700")
+PY
+)"
+fi
+
+exec python3 - "$agent" "$BASE_URL" "$TOKEN" "$DATA_DIR" "$HEARTBEAT_SEC" "$NOTIFY" <<'PY'
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+agent, base_url, token, data_dir, heartbeat_sec, notify = sys.argv[1:7]
+heartbeat_sec = max(15, int(float(heartbeat_sec)))
+notify = notify.strip() != "0"
+inbox_dir = Path(data_dir) / "inbox" / agent
+pending_path = inbox_dir / "pending.jsonl"
+signal_path = inbox_dir / "signal"
+state_path = inbox_dir / "watch-state.json"
+inbox_dir.mkdir(parents=True, exist_ok=True)
+
+headers = {"Authorization": f"Bearer {token}"}
+
+def log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    print(f"[omsg-watch:{agent}] {ts} {msg}", flush=True)
+
+def request_json(method: str, path: str, payload=None, timeout=20):
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=data,
+        headers={**headers, "Content-Type": "application/json"},
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+def heartbeat() -> None:
+    try:
+        request_json("GET", "/api/agents")
+        request_json("POST", "/api/subscribe", {
+            "source_agent": agent,
+            "since_id": 0,
+            "limit": 1,
+            "mark_read": False,
+            "include_pending": False,
+        })
+    except Exception as exc:
+        log(f"heartbeat failed: {exc}")
+
+def append_pending(message: dict) -> bool:
+    mid = int(message.get("id") or 0)
+    if mid <= 0:
+        return False
+    existing = set()
+    if pending_path.exists():
+        for line in pending_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                existing.add(int(json.loads(line).get("id") or 0))
+            except Exception:
+                pass
+    if mid in existing:
+        return False
+    with pending_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(message, ensure_ascii=False, default=str) + "\n")
+    signal_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    return True
+
+def maybe_notify(message: dict) -> None:
+    if not notify:
+        return
+    if os.environ.get("DISPLAY", "") == "" and os.environ.get("WAYLAND_DISPLAY", "") == "":
+        return
+    topic = message.get("topic") or "message"
+    sender = message.get("from_agent") or "unknown"
+    body = (message.get("body") or "").strip().replace("\n", " ")
+    if len(body) > 180:
+        body = body[:177] + "..."
+    try:
+        os.spawnlp(os.P_NOWAIT, "notify-send", "notify-send",
+                   f"OMSG {agent}: {sender}",
+                   f"{topic}\n{body}",
+                   "-u", "normal",
+                   "-a", "omega-brain")
+    except Exception:
+        pass
+
+def load_state() -> dict:
+    if state_path.exists():
+        try:
+            return json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"watermark": 0}
+
+def save_state(state: dict) -> None:
+    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+state = load_state()
+last_heartbeat = 0.0
+log(f"watching {base_url}/events as {agent}")
+
+while True:
+    now = time.time()
+    if now - last_heartbeat >= heartbeat_sec:
+        heartbeat()
+        last_heartbeat = now
+    try:
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/events",
+            headers=headers,
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload:
+                    continue
+                try:
+                    event = json.loads(payload)
+                except Exception:
+                    continue
+                if event.get("agent") and "watermark" in event:
+                    state["watermark"] = max(int(state.get("watermark") or 0), int(event.get("watermark") or 0))
+                    save_state(state)
+                    log(f"connected watermark={state['watermark']}")
+                    continue
+                mid = int(event.get("id") or 0)
+                if mid <= int(state.get("watermark") or 0):
+                    continue
+                if append_pending(event):
+                    state["watermark"] = mid
+                    save_state(state)
+                    log(f"delivered id={mid} from={event.get('from_agent')} topic={event.get('topic')}")
+                    maybe_notify(event)
+    except urllib.error.HTTPError as exc:
+        log(f"SSE HTTP error {exc.code}; retry in 5s")
+        time.sleep(5)
+    except Exception as exc:
+        log(f"SSE disconnected: {exc}; retry in 5s")
+        time.sleep(5)
+PY

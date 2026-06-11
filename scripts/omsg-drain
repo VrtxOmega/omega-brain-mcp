@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Drain live pending inbox for one agent via omega_subscribe.
+
+SKILL_HELPER=/home/rage/.codex/skills/omega-brain-v2-inbox/scripts/omega-brain-inbox.sh
+
+normalize_agent() {
+  local raw="${1,,}"
+  case "$raw" in
+    anti-gravity|anti_gravity|"anti gravity") echo antigravity ;;
+    windsurf|windswift) echo devin ;;
+    *) echo "$raw" ;;
+  esac
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  omsg-drain <agent> [--since <id>] [--mark-read] [--json]
+
+Drains live pending messages for an agent using POST /api/subscribe.
+Default: print human-readable messages, clear pending queue, do not mark read.
+USAGE
+}
+
+agent=""
+since_id=0
+mark_read=false
+as_json=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --since) since_id="$2"; shift 2 ;;
+    --mark-read) mark_read=true; shift ;;
+    --json) as_json=true; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+      if [[ -z "$agent" ]]; then
+        agent="$(normalize_agent "$1")"
+        shift
+      else
+        echo "Unknown arg: $1" >&2
+        usage
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$agent" ]]; then
+  usage
+  exit 2
+fi
+
+TOKEN="${OMEGA_BRAIN_TOKEN:-}"
+if [[ -z "$TOKEN" ]]; then
+  TOKEN="$(python3 - "$agent" <<'PY'
+import json, pathlib, sys
+agent = sys.argv[1]
+data = json.loads(pathlib.Path.home().joinpath('.omega-brain/agent_tokens.json').read_text())
+for token, name in data.items():
+    if name == agent:
+        print(token)
+        break
+PY
+)"
+fi
+if [[ -z "$TOKEN" && -f "$HOME/.omega-brain/network.token" ]]; then
+  TOKEN="$(cat "$HOME/.omega-brain/network.token")"
+fi
+if [[ -z "$TOKEN" ]]; then
+  echo "Missing token for agent $agent" >&2
+  exit 1
+fi
+
+BASE_URL="${OMEGA_BASE_URL:-http://100.65.218.30:7700}"
+payload="$(python3 - "$agent" "$since_id" "$mark_read" <<'PY'
+import json, sys
+agent, since_id, mark_read = sys.argv[1:4]
+print(json.dumps({
+    "source_agent": agent,
+    "since_id": int(since_id or 0),
+    "limit": 50,
+    "mark_read": mark_read.lower() == "true",
+    "clear_pending": True,
+    "include_pending": True,
+}))
+PY
+)"
+
+response="$(curl -fsS -X POST "$BASE_URL/api/subscribe" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data "$payload")"
+
+if [[ "$as_json" == true ]]; then
+  printf '%s\n' "$response" | python3 -m json.tool
+  exit 0
+fi
+
+python3 - "$response" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+messages = payload.get("messages", [])
+if not messages:
+    print(f"No live messages for {payload.get('agent', 'agent')} since_id={payload.get('since_id', 0)}.")
+    raise SystemExit(0)
+for m in messages:
+    print(f"[{m.get('created_at','')}] {m.get('from_agent','?')} -> {m.get('to_agent','?')} :: {m.get('topic','')}")
+    print(m.get('body', ''))
+    print()
+print(f"watermark={payload.get('watermark')} pending_cleared={payload.get('pending_cleared', 0)}")
+PY
