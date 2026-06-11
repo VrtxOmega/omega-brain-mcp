@@ -60,7 +60,7 @@
       "notDefaultOwnerOf": [
         "implementation commits unless write scope is explicitly split"
       ],
-      "drainCommand": "omsg-drain grok --json"
+      "drainCommand": "omsg-must-drain grok --json"
     },
     "codex": {
       "aliases": [],
@@ -82,7 +82,7 @@
       "notDefaultOwnerOf": [
         "global config changes or public GitHub writes without approval"
       ],
-      "drainCommand": "omsg-drain codex --json"
+      "drainCommand": "omsg-must-drain codex --json"
     },
     "hermes": {
       "aliases": [],
