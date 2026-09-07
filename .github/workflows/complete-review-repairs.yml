@@ -18,7 +18,16 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt pytest
-      - run: python .github/review_repairs.py
+      - run: |
+          python .github/review_repairs.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/test_review_regressions.py')
+          text = p.read_text(encoding='utf-8')
+          before = "write_text('dist/" + chr(92) + "n')"
+          assert text.count(before) == 1
+          p.write_text(text.replace(before, "write_text('dist/' + chr(10))"), encoding='utf-8', newline='\n')
+          PY
       - run: python -m pytest tests/ -v
         env:
           PYTHONUTF8: '1'
