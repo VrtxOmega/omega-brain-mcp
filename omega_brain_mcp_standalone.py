@@ -46,6 +46,7 @@ Data stored at: ~/.omega-brain/  (configurable via OMEGA_BRAIN_DATA_DIR)
 """
 
 import hashlib
+import asyncio
 import json
 import logging
 import math
@@ -54,6 +55,7 @@ import re
 import sqlite3
 import sys
 import uuid
+import omega_runtime as runtime
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -117,58 +119,15 @@ _embed_model = None
 _EMBED_ENGINE = "tfidf"   # updated in _init_embeddings
 
 def _init_embeddings():
-    global _embed_model, _EMBED_ENGINE
-    # Tier 1: sentence-transformers (if already installed)
-    try:
-        from sentence_transformers import SentenceTransformer
-        _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-        _EMBED_ENGINE = "sentence-transformers"
-        log.info("[omega-brain] Embeddings: sentence-transformers/all-MiniLM-L6-v2")
-        return
-    except Exception:
-        pass
-    # Tier 2: fastembed (ONNX — zero GPU, ~30MB model cached on first use)
-    try:
-        from fastembed import TextEmbedding
-        _embed_model = TextEmbedding(model_name="snowflake/snowflake-arctic-embed-xs")
-        _EMBED_ENGINE = "fastembed-onnx"
-        log.info("[omega-brain] Embeddings: fastembed ONNX (snowflake/snowflake-arctic-embed-xs)")
-        return
-    except Exception:
-        pass
-    # Tier 3: TF-IDF n-gram fallback (no deps, always works)
-    _EMBED_ENGINE = "tfidf"
-    log.info("[omega-brain] Embeddings: TF-IDF fallback — pip install fastembed for ONNX quality")
+    global _EMBED_ENGINE, _embed_model
+    _EMBED_ENGINE = runtime.EMBED_VERSION
+    _embed_model = None
 
-def _embed(text: str) -> list[float]:
-    """Embed text to a dense vector. 3-tier: sentence-transformers, fastembed, TF-IDF."""
-    if not text:
-        return []
-    if _EMBED_ENGINE == "sentence-transformers" and _embed_model:
-        return _embed_model.encode(text, normalize_embeddings=True).tolist()
-    if _EMBED_ENGINE == "fastembed-onnx" and _embed_model:
-        return [float(x) for x in next(iter(_embed_model.embed([text])))]
-    # TF-IDF n-gram fallback (128-dim)
-    t = text.lower()
-    ngrams: dict[str, int] = {}
-    for n in (2, 3):
-        for i in range(len(t) - n + 1):
-            g = t[i:i+n]
-            ngrams[g] = ngrams.get(g, 0) + 1
-    keys = sorted(ngrams.keys())[:128]
-    vec = [float(ngrams.get(k, 0)) for k in keys]
-    norm = math.sqrt(sum(v*v for v in vec)) or 1.0
-    return [v / norm for v in vec]
+def _embed(text):
+    return runtime.embed(text)
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b:
-        return 0.0
-    min_len = min(len(a), len(b))
-    a, b = a[:min_len], b[:min_len]
-    dot = sum(x*y for x,y in zip(a,b))
-    na  = math.sqrt(sum(x*x for x in a)) or 1.0
-    nb  = math.sqrt(sum(x*x for x in b)) or 1.0
-    return max(-1.0, min(1.0, dot / (na * nb)))
+def _cosine(a,b):
+    return runtime.cosine(a,b)
 
 _init_embeddings()
 
@@ -252,35 +211,21 @@ def _init_db():
     log.info(f"[omega-brain] DB initialized at {DB_PATH}")
 
 _init_db()
+if not runtime.ledger_verify(DB_PATH)['rows']:
+    runtime.ledger_append(DB_PATH,'MIGRATION_READY',{'version':2})
 
 # ══════════════════════════════════════════════════════════════════
 # S.E.A.L. LEDGER
 # ══════════════════════════════════════════════════════════════════
 
-def _seal_event(event_type: str, payload: dict) -> str:
-    """Append a sealed event to the ledger. Returns the new hash."""
-    conn = _db()
-    last = conn.execute(
-        "SELECT hash FROM ledger ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    prev_hash = last["hash"] if last else ("GENESIS:" + _SESSION_ID)
-    now = datetime.now(timezone.utc).isoformat()
-    payload_str = json.dumps(payload, sort_keys=True)
-    new_hash = hashlib.sha3_256(
-        (prev_hash + event_type + payload_str + now).encode()
-    ).hexdigest()
-    conn.execute(
-        "INSERT INTO ledger (prev_hash, event_type, payload, hash, timestamp) VALUES (?,?,?,?,?)",
-        (prev_hash, event_type, payload_str, new_hash, now)
-    )
-    conn.commit()
-    conn.close()
-    return new_hash
+def _seal_event(event_type,payload):
+    return runtime.ledger_append(DB_PATH,event_type,payload,payload.get('task_id', 'system'))
 
-def _seal_run(context: dict, response: str) -> dict:
-    """S.E.A.L. trace for an agentic run."""
-    h = _seal_event("agentic_run", {"context": context, "response": response[:500]})
-    return {"seal_hash": h, "session_id": _SESSION_ID, "timestamp": datetime.now(timezone.utc).isoformat()}
+def _seal_run(context,response):
+    task_id=context.get('task_id') or context.get('session_id')
+    if not task_id:raise ValueError('context.task_id is required')
+    digest=_seal_event('agentic_run',{'context':context,'response':response,'task_id':task_id})
+    return {'seal_hash':digest,'task_id':task_id,'meaning':'local content integrity, not verification of the claim'}
 
 # ══════════════════════════════════════════════════════════════════
 # VAULT
@@ -288,7 +233,8 @@ def _seal_run(context: dict, response: str) -> dict:
 
 def _vault_log_session(session_id: str, task: str, decisions: list, files: list) -> dict:
     """Write a session record to the local vault."""
-    sid = session_id or _SESSION_ID
+    if not session_id:raise ValueError('session_id required')
+    sid = session_id
     now = datetime.now(timezone.utc).isoformat()
     conn = _db()
     conn.execute("""
@@ -296,17 +242,17 @@ def _vault_log_session(session_id: str, task: str, decisions: list, files: list)
         VALUES (?, ?, ?, 'antigravity', ?, ?)
         ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, summary=excluded.summary
     """, (sid, task[:200], f"{len(decisions)} decisions | {len(files)} files", now, now))
-    for d in decisions[:50]:
+    for d in decisions:
         conn.execute(
             "INSERT INTO entries (session_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
-            (sid, "assistant", str(d)[:2000], now, len(str(d)))
+            (sid, "assistant", str(d), now, len(str(d)))
         )
         try:
-            conn.execute("INSERT INTO entries_fts (content, session_id) VALUES (?,?)", (str(d)[:2000], sid))
+            conn.execute("INSERT INTO entries_fts (content, session_id) VALUES (?,?)", (str(d), sid))
         except Exception:
             pass
     if files:
-        payload = f"Files modified: {json.dumps(files[:100])}"
+        payload = f"Files modified: {json.dumps(files)}"
         conn.execute(
             "INSERT INTO entries (session_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
             (sid, "system", payload, now, 0)
@@ -320,36 +266,20 @@ def _vault_log_session(session_id: str, task: str, decisions: list, files: list)
     )
     conn.commit()
     conn.close()
-    seal = _seal_event("vault_session", {"session_id": sid, "task": task[:100]})
+    seal = _seal_event("vault_session", {"task_id": sid, "session_id": sid, "task": task})
     return {"logged": True, "session_id": sid, "seal_hash": seal[:16]}
 
-def _vault_search(query: str) -> dict:
-    """FTS keyword search over vault entries (chat) AND provenance fragments (Bible/projects)."""
-    if not query:
-        return {"results": [], "count": 0}
+def _vault_search(query,task_id=None,cross_task=False):
+    if not task_id and not cross_task:raise ValueError('task_id required or explicit cross_task=true')
+    terms=runtime.tokens(query)[:20]
+    if not terms:return {'results':[]}
+    match=' OR '.join('"'+t+'"' for t in terms)
+    conn=_db()
     try:
-        conn = _db()
-        rows = []
-        # Search provenance fragments FTS (Bible entries, project index, etc.)
-        try:
-            rows += list(conn.execute(
-                "SELECT content, source as title, tier FROM fragments_fts WHERE fragments_fts MATCH ? LIMIT 20",
-                (query,)
-            ).fetchall())
-        except Exception:
-            pass
-        # Always search vault entries FTS (chat history, decisions) as well
-        try:
-            rows += list(conn.execute(
-                "SELECT content, session_id as title, NULL as tier FROM entries_fts WHERE entries_fts MATCH ? LIMIT 20",
-                (query,)
-            ).fetchall())
-        except Exception:
-            pass
-        conn.close()
-        return {"query": query, "results": [dict(r) for r in rows[:20]], "count": len(rows[:20])}
-    except Exception as e:
-        return {"query": query, "results": [], "count": 0, "error": str(e)}
+        scope='' if cross_task else ' AND session_id=?'
+        rows=conn.execute('SELECT content,session_id FROM entries_fts WHERE entries_fts MATCH ?'+scope+' LIMIT 20',[match]+([] if cross_task else [task_id])).fetchall()
+    finally:conn.close()
+    return {'query':query,'entries':[dict(r) for r in rows],'fragments':_rag_search(query,20,task_id,cross_task)['fragments']}
 
 def _vault_autoseal(session_id: str = "", hint_task: str = "") -> dict:
     """Auto-generate session summary from vault tape. No user input required."""
@@ -358,7 +288,8 @@ def _vault_autoseal(session_id: str = "", hint_task: str = "") -> dict:
         "SELECT payload, timestamp FROM tape WHERE event_type='antigravity_session' ORDER BY id DESC LIMIT 5"
     ).fetchall()
     entry_rows = []
-    sid = session_id or _SESSION_ID
+    if not session_id:raise ValueError('session_id required')
+    sid = session_id
     entry_rows = conn.execute(
         "SELECT role, content FROM entries WHERE session_id=? ORDER BY id DESC LIMIT 20",
         (sid,)
@@ -400,119 +331,23 @@ def _vault_autoseal(session_id: str = "", hint_task: str = "") -> dict:
 # PROVENANCE / RAG
 # ══════════════════════════════════════════════════════════════════
 
-def _ingest_fragment(content: str, source: str = "user", tier: str = "B") -> str:
-    """Add a text fragment to the RAG provenance store."""
-    fid = hashlib.sha256(content.encode()).hexdigest()[:32]
-    vec = _embed(content)
-    now = datetime.now(timezone.utc).isoformat()
-    conn = _db()
-    conn.execute("""
-        INSERT OR IGNORE INTO fragments (id, content, source, tier, embedding, ingested_at)
-        VALUES (?,?,?,?,?,?)
-    """, (fid, content[:4000], source, tier, json.dumps(vec), now))
-    # Also index into FTS5 for keyword search (Bible entries, project index, etc.)
+def _ingest_fragment(content, source='user', tier='B', task_id='global', supersedes=None, metadata=None):
+    return runtime.ingest(DB_PATH,content,source,tier,task_id,supersedes,metadata)
+
+def _rag_search(query,top_k=5,task_id=None,cross_task=False):
+    return runtime.search(DB_PATH,query,top_k,task_id,cross_task)
+
+def _brain_preload(task,task_id=None):
+    if not task_id:raise ValueError('task_id is required to isolate task context')
+    rag=_rag_search(task,5,task_id)
+    conn=_db()
     try:
-        conn.execute(
-            "INSERT INTO fragments_fts(rowid, content, source, tier) VALUES ((SELECT id FROM fragments WHERE id=?),?,?,?)",
-            (fid, content[:4000], source, tier)
-        )
-    except Exception:
-        pass  # FTS table may not exist on fresh DB; created in _init_db
-    conn.commit()
-    conn.close()
-    return fid
-
-def _rag_search(query: str, top_k: int = 5) -> dict:
-    """Semantic search over stored RAG fragments. Returns top-k with VERITAS score."""
-    q_vec = _embed(query)
-    conn = _db()
-    rows = conn.execute("SELECT id, content, source, tier, embedding FROM fragments").fetchall()
-    conn.close()
-
-    # Gap #13 fix: tier-boosted scoring ensures tier-A fragments surface first
-    # even when their raw cosine similarity is slightly lower than tier-B
-    TIER_BOOST = {"A": 0.08, "B": 0.0, "C": -0.04, "D": -0.08}
-
-    results = []
-    for row in rows:
-        try:
-            fv = json.loads(row["embedding"] or "[]")
-            sim = _cosine(q_vec, fv)
-            boost = TIER_BOOST.get(row["tier"], 0.0)
-            boosted_score = min(1.0, max(-1.0, sim + boost))
-            results.append({
-                "id": row["id"],
-                "content": row["content"][:500],
-                "source": row["source"],
-                "tier": row["tier"],
-                "score": round(boosted_score, 4),
-                "raw_sim": round(sim, 4),
-            })
-        except Exception:
-            pass
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    top = results[:top_k]
-
-    # VERITAS scoring
-    tier_map = {"A": 1.0, "B": 0.85, "C": 0.70, "D": 0.55}
-    quality = (sum(tier_map.get(r["tier"], 0.5) for r in top) / len(top)) if top else 0.0
-    sources = set(r["source"] for r in top)
-    indep = 1.0 if len(sources) >= 2 else 0.7
-    scores = [r["score"] for r in top if r["score"] > 0]
-    spread = (max(scores) - min(scores)) if len(scores) >= 2 else 0.0
-    agreement = max(0.0, 1.0 - spread)
-    veritas_score = round(min(1.0, max(0.0, agreement * quality * indep)), 4)
-
-    return {
-        "query": query,
-        "fragments": top,
-        "veritas_score": veritas_score,
-        "fragment_count": len(top),
-        "total_indexed": len(rows),
-        "session_id": _SESSION_ID,
-    }
-
-def _brain_preload(task: str) -> dict:
-    """Full brain preload: RAG + handoff + vault context bundled with integrity hash."""
-    rag = _rag_search(task, top_k=5)
-    vault_recent = []
-    try:
-        conn = _db()
-        rows = conn.execute(
-            "SELECT title, summary, updated_at FROM sessions ORDER BY updated_at DESC LIMIT 5"
-        ).fetchall()
-        conn.close()
-        vault_recent = [dict(r) for r in rows]
-    except Exception:
-        pass
-
-    handoff = _read_handoff()
-    # Gap #5: pull Stenographer briefs into preload so agent has full context
-    steno_context: dict = {}
-    if HAS_BRIDGE:
-        steno_context = _bridge.read_steno_brief(limit=3)
-
-    # Gap #4: ensure a trace ID is active for this session
-    trace_id = ""
-    if HAS_BRIDGE:
-        trace_id = _bridge.get_or_create_trace()
-
-    bundle = {
-        "task": task,
-        "rag_fragments": rag.get("fragments", []),
-        "veritas_score": rag.get("veritas_score", 0.0),
-        "vault_recent": vault_recent,
-        "last_session_handoff": handoff or {},
-        "handoff_present": bool(handoff),
-        "session_id": _SESSION_ID,
-        "trace_id": trace_id,
-        "steno_context": steno_context,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    bundle_str = json.dumps({k: v for k, v in bundle.items() if k != "preload_hash"}, sort_keys=True)
-    bundle["preload_hash"] = hashlib.sha256(bundle_str.encode()).hexdigest()[:32]
-    return bundle
+        rows=conn.execute('SELECT title,summary,updated_at FROM sessions WHERE id=?',(task_id,)).fetchall()
+    except sqlite3.OperationalError:
+        rows=[]
+    finally:conn.close()
+    handoff=_read_handoff(task_id)
+    return {'task':task,'task_id':task_id,'trace':runtime.trace(task_id),'rag':rag,'vault_recent':[dict(r) for r in rows],'last_session_handoff':handoff,'steno_context':_bridge.read_steno_brief(task_id=task_id) if HAS_BRIDGE else {},'timestamp':datetime.now(timezone.utc).isoformat()}
 
 # ══════════════════════════════════════════════════════════════════
 # CORTEX — TRI-NODE APPROVAL + STEER
@@ -523,118 +358,43 @@ def _cortex_similarity(baseline: str, action: str) -> float:
     av = _embed(action)
     return _cosine(bv, av)
 
-def _cortex_check(tool: str, args: dict, baseline_prompt: str) -> dict:
-    """Tri-Node approval gate."""
-    if not tool or not baseline_prompt:
-        return {"approved": False, "reason": "MISSING_PARAMS"}
-    action_text = f"Tool: {tool} | Args: {json.dumps(args)}"
-    sim = _cortex_similarity(baseline_prompt, action_text)
-    approved = sim >= STEER_FLOOR
-    _seal_event("cortex_check", {"tool": tool, "similarity": round(sim, 4), "approved": approved})
-    return {
-        "approved": approved,
-        "similarity": round(sim, 4),
-        "session_id": _SESSION_ID,
-        "reason": "APPROVED" if approved else f"NAEF_VIOLATION: similarity {sim:.3f} below floor {STEER_FLOOR}",
-    }
+def _cortex_check(tool,args,baseline_prompt):
+    if not tool or not isinstance(args,dict) or not baseline_prompt:
+        raise ValueError('tool, args and baseline_prompt are required')
+    score=_cortex_similarity(baseline_prompt, f'{tool} {json.dumps(args)}')
+    return {'approved':None,'permission_checked':False,'alignment_score':round(score,4),'score_kind':'lexical_similarity_not_authorization','reason':'Advisory only. Use omega_authorize_action for an operator-policy receipt.'}
 
-def _cortex_steer(tool: str, args: dict, baseline_prompt: str) -> dict:
-    """Cortex correction mode: steer instead of just blocking."""
-    if not tool or not baseline_prompt:
-        return {"approved": False, "correction_applied": False, "reason": "MISSING_PARAMS"}
-    action_text = f"Tool: {tool} | Args: {json.dumps(args)}"
-    sim = _cortex_similarity(baseline_prompt, action_text)
-
-    if sim < STEER_FLOOR:
-        _seal_event("cortex_steer_block", {"tool": tool, "similarity": round(sim, 4)})
-        return {
-            "approved": False, "correction_applied": False,
-            "similarity": round(sim, 4),
-            "reason": f"NAEF_VIOLATION: {sim:.3f} below floor {STEER_FLOOR}. Unconditional block.",
-        }
-
-    if sim < STEER_CEILING:
-        steered_args, corrections = {}, []
-        for k, v in args.items():
-            if isinstance(v, str) and (v.startswith("/") or v.startswith("C:\\") or len(v) > 500):
-                steered_args[k] = v[:200] + "...[steered]"
-                corrections.append(k)
-            else:
-                steered_args[k] = v
-        _seal_event("cortex_steer_corrected", {"tool": tool, "similarity": round(sim, 4), "corrections": corrections})
-        return {
-            "approved": True, "correction_applied": True,
-            "similarity": round(sim, 4), "steered_args": steered_args,
-            "corrections": corrections,
-            "reason": f"STEER_APPLIED: {len(corrections)} arg(s) corrected.",
-        }
-
-    return {"approved": True, "correction_applied": False, "similarity": round(sim, 4), "steered_args": args}
+def _cortex_steer(tool,args,baseline_prompt):
+    result=_cortex_check(tool,args,baseline_prompt)
+    return dict(result,correction_applied=False,steered_args=dict(args),corrections=[])
 
 # ══════════════════════════════════════════════════════════════════
 # HANDOFF — SHA-256 SEALED CROSS-SESSION MEMORY
 # ══════════════════════════════════════════════════════════════════
 
-def _write_handoff(task: str, summary: str, decisions: list,
-                   files: list, next_steps: list, conversation_id: str) -> dict:
-    # Gap #7: include SSWP ecosystem health so next session knows codebase state
-    sswp_health: dict = {}
-    if HAS_BRIDGE:
-        sswp_health = _bridge.read_sswp_health(limit=3)
+def _write_handoff(task,summary,decisions,files,next_steps,conversation_id):
+    if not conversation_id:raise ValueError('conversation_id is required')
+    folder=DATA_DIR/'handoffs-v2';folder.mkdir(exist_ok=True)
+    dest=folder/(hashlib.sha256(conversation_id.encode()).hexdigest()+'.json')
+    record={'version':2,'task_id':conversation_id,'task':task,'summary':summary,'decisions':decisions,'files_modified':files,'next_steps':next_steps,'timestamp':datetime.now(timezone.utc).isoformat()}
+    record['seal']=hashlib.sha256(runtime.canonical(record).encode()).hexdigest()
+    temporary=dest.with_suffix('.'+uuid.uuid4().hex+'.tmp');temporary.write_text(runtime.canonical(record),encoding='utf-8');temporary.replace(dest)
+    return dict(record,path=str(dest))
 
-    # Gap #4: include current trace ID
-    trace_id = _bridge.get_or_create_trace() if HAS_BRIDGE else ""
-
-    record = {
-        "conversation_id": conversation_id or _SESSION_ID,
-        "task": task[:500],
-        "summary": summary[:2000],
-        "decisions": decisions[:50],
-        "files_modified": files[:100],
-        "next_steps": next_steps[:20],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "mcp_session_id": _SESSION_ID,
-        "trace_id": trace_id,
-        "sswp_ecosystem_health": sswp_health,
-    }
-    content = json.dumps(record, sort_keys=True)
-    record["seal"] = hashlib.sha256(content.encode()).hexdigest()
-    HANDOFF_FILE.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    _seal_event("handoff_written", {"task": task[:100], "trace_id": trace_id})
-    log.info(f"[omega-brain] Handoff sealed → {HANDOFF_FILE}")
-    return record
-
-def _read_handoff() -> Optional[dict]:
-    if not HANDOFF_FILE.exists():
-        return None
-    try:
-        raw = json.loads(HANDOFF_FILE.read_text(encoding="utf-8"))
-        seal = raw.pop("seal", None)
-        expected = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
-        if seal != expected:
-            log.warning("[omega-brain] Handoff seal mismatch — ignoring")
-            return None
-        raw["seal"] = seal
-        raw["seal_verified"] = True
-        return raw
-    except Exception as e:
-        log.warning(f"[omega-brain] Handoff read error: {e}")
-        return None
+def _read_handoff(task_id=None):
+    if not task_id:return None
+    path=DATA_DIR/'handoffs-v2'/(hashlib.sha256(task_id.encode()).hexdigest()+'.json')
+    if not path.exists():return None
+    raw=json.loads(path.read_text(encoding='utf-8'));digest=raw.pop('seal')
+    if hashlib.sha256(runtime.canonical(raw).encode()).hexdigest()!=digest:raise ValueError('Handoff hash mismatch')
+    return dict(raw,seal=digest)
 
 # ── Startup preload (auto-fired at import) ──────────────────────
 _STARTUP_PRELOAD: dict = {}
 
 def _run_startup_preload():
     global _STARTUP_PRELOAD
-    handoff = _read_handoff()
-    preload = _brain_preload("general workspace context and recent decisions")
-    if handoff:
-        preload["last_session_handoff"] = handoff
-        preload["handoff_present"] = True
-        log.info(f"[omega-brain] Handoff loaded: {handoff.get('task','')[:60]}")
-    else:
-        preload["handoff_present"] = False
-    _STARTUP_PRELOAD = preload
+    _STARTUP_PRELOAD={'status':'SCOPE_REQUIRED','instruction':'Call omega_preload_context with the current task_id and task description.'}
 
 try:
     _run_startup_preload()
@@ -928,6 +688,8 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
     if not HAS_BUILD_GATES:
         return json.dumps({"error": "VERITAS Build Gates not available. Check veritas_build_gates.py."})
 
+    task_id=arguments.get('task_id')
+    if name in ('veritas_run_pipeline','veritas_claeg_transition','veritas_nafe_scan') and not task_id:raise ValueError('task_id required for audited evaluations')
     claim_data = arguments.get("claim", {})
     if isinstance(claim_data, str):
         try:
@@ -969,7 +731,7 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
         final_verdict = result.get("final_verdict", "")
         # Auto-seal to SEAL ledger
         _seal_event("veritas_pipeline_run", {
-            "claim_id": result.get("claim_id", "")[:32],
+            "task_id": task_id, "claim_id": result.get("claim_id", ""),
             "verdict": final_verdict,
             "regime": result.get("regime", ""),
             "seal": result.get("final_seal", "")[:32],
@@ -977,12 +739,12 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
         # Gap #16: emit VIOLATION to shared event bus so Stenographer auto-ingests it as blocker
         if final_verdict == "VIOLATION" and HAS_BRIDGE:
             _bridge.emit_event("VERITAS_PIPELINE_VIOLATION", {
-                "claim_id": result.get("claim_id", "")[:32],
+                "task_id": task_id, "claim_id": result.get("claim_id", ""),
                 "halted_at": result.get("halted_at", ""),
                 "reasons": result.get("all_reasons", [])[:5],
                 "regime": result.get("regime", ""),
-                "session_id": _SESSION_ID,
-            }, source="omega-brain")
+                "session_id": task_id,
+            }, source="omega-brain",task_id=task_id)
         # Gap #8: expose adversarial risk in SEAL payload for cross-system use
         adv_gate = next((g for g in result.get("gate_results", [])
                          if g.get("gate") == "ADVERSARY"), None)
@@ -991,7 +753,7 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
                 "verdict": adv_gate.get("verdict", ""),
                 "fragility": adv_gate.get("details", {}).get("fragility", 0),
                 "claim_id": result.get("claim_id", "")[:16],
-            }, source="omega-brain")
+            }, source="omega-brain",task_id=task_id)
         return json.dumps(result, indent=2, default=str)
 
     if name == "veritas_compute_quality":
@@ -1028,11 +790,11 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
                 "current_state": current,
                 "target_state": target,
                 "reason": result.get("reason", ""),
-                "session_id": _SESSION_ID,
-            }, source="omega-brain")
-            _bridge.update_claeg_state("TERMINAL_SHUTDOWN")
+                "session_id": task_id,
+            }, source="omega-brain",task_id=task_id)
+            _bridge.update_claeg_state("TERMINAL_SHUTDOWN",task_id=task_id)
         elif result.get("allowed") and HAS_BRIDGE:
-            _bridge.update_claeg_state(target)
+            _bridge.update_claeg_state(target,task_id=task_id)
         return json.dumps(result)
 
     if name == "veritas_nafe_scan":
@@ -1050,8 +812,12 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
 # ══════════════════════════════════════════════════════════════════
 
 try:
+    from contextlib import asynccontextmanager
+
+    import anyio
+    from mcp import types
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
+    from mcp.shared.message import SessionMessage
     from mcp.types import Tool, TextContent, Resource, ResourceTemplate, Prompt, PromptMessage, PromptArgument
     HAS_MCP = True
 except ImportError:
@@ -1059,13 +825,47 @@ except ImportError:
     log.error("MCP SDK not installed. Run: pip install mcp")
 
 if HAS_MCP:
+    @asynccontextmanager
+    async def stdio_server():
+        """Line-delimited stdio transport that works reliably with piped stdin."""
+        read_send, read_recv = anyio.create_memory_object_stream(0)
+        write_send, write_recv = anyio.create_memory_object_stream(0)
+
+        async def stdin_reader():
+            async with read_send:
+                while True:
+                    line = await asyncio.to_thread(sys.stdin.readline)
+                    if line == "":
+                        break
+                    try:
+                        message = types.JSONRPCMessage.model_validate_json(line)
+                    except Exception as exc:
+                        await read_send.send(exc)
+                        continue
+                    await read_send.send(SessionMessage(message))
+
+        async def stdout_writer():
+            async with write_recv:
+                async for session_message in write_recv:
+                    payload = session_message.message.model_dump_json(
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    print(payload, flush=True)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(stdin_reader)
+            tg.start_soon(stdout_writer)
+            yield read_recv, write_send
+            tg.cancel_scope.cancel()
+
     app = Server("omega-brain-standalone")
 
     # ── Tools ────────────────────────────────────────────────────
 
     @app.list_tools()
     async def list_tools():
-        return [
+        tools = [
             Tool(name="omega_preload_context",
                  description=(
                      "Loads episodic context for a new task by querying the RAG store, vault history, and any sealed handoff. "
@@ -1303,6 +1103,34 @@ if HAS_MCP:
                  inputSchema={"type": "object", "properties": {}}),
         ] + (_veritas_build_tools() if HAS_BUILD_GATES else [])
 
+        for tool in tools:
+            if tool.name in ('omega_preload_context','omega_rag_query','omega_ingest','omega_vault_search'):
+                tool.inputSchema['properties']['task_id']={'type':'string','minLength':1}
+                tool.inputSchema['properties']['cross_task']={'type':'boolean','default':False}
+            if tool.name in ('omega_preload_context','omega_ingest'):
+                tool.inputSchema.setdefault('required',[]).append('task_id')
+            if tool.name=='omega_log_session':tool.inputSchema.setdefault('required',[]).append('session_id')
+            if tool.name=='omega_write_handoff':
+                tool.inputSchema.setdefault('required',[]).append('conversation_id')
+                tool.description='Save a task-scoped handoff with a local content hash. Reload through omega_preload_context using the same task_id.'
+            if tool.name in ('veritas_dependency_gate','veritas_security_gate'):
+                tool.description='Evaluate caller-supplied claim evidence against configured rules. Does not run scanners, query CVEs, or independently validate evidence.'
+            if tool.name=='veritas_run_pipeline':tool.description='Evaluate caller-supplied claim evidence through the ten configured gates. Results are conditional on supplied evidence; this tool does not independently collect scanner findings.'
+            if tool.name=='veritas_mis_greedy':tool.description='Compute a greedy maximal independent set of supplied evidence. This is not guaranteed to be the maximum independent set.'
+            if tool.name=='omega_brain_report':tool.description='Report current v2 integrity and clearly separated historical records.'
+            if tool.name in ('veritas_run_pipeline','veritas_claeg_transition','veritas_nafe_scan'):
+                tool.inputSchema['properties']['task_id']={'type':'string','minLength':1}
+                tool.inputSchema.setdefault('required',[]).append('task_id')
+            if tool.name=='omega_ingest':
+                tool.inputSchema['properties'].update(supersedes={'type':'string'},metadata={'type':'object'})
+            if tool.name.startswith('omega_cortex_'):
+                tool.description='Advisory lexical alignment analysis. Does not authorize actions or alter arguments.'
+            if tool.name=='omega_execute':tool.description='Schema-validated internal Brain dispatch with a local audit record. Does not intercept external tools.'
+            if tool.name=='omega_rag_query':tool.description='Task-scoped indexed lexical retrieval. Explicit cross_task=true permits a global search. Scores are relevance signals, not confidence.'
+            tool.description=tool.description.replace('tamper-proof','tamper-evident').replace('immutable ledger','local audit ledger')
+        tools += [Tool(name='omega_authorize_action',description='Issue a short-lived local receipt for an exact SSWP action allowed by the operator policy file. Does not infer permission from similarity.',inputSchema={'type':'object','properties':{'tool':{'type':'string'},'args':{'type':'object'},'task_id':{'type':'string'}},'required':['tool','args','task_id']}),Tool(name='omega_integrity_status',description='Verify the v2 chain and report historical verification limits.',inputSchema={'type':'object','properties':{}})]
+        return tools
+
     @app.call_tool()
     async def call_tool(name: str, arguments: dict) -> list:
         global _CALL_COUNTER
@@ -1310,24 +1138,24 @@ if HAS_MCP:
         arguments = arguments or {}
         try:
             if name == "omega_preload_context":
-                result = _brain_preload(arguments.get("task", "general context"))
+                result = _brain_preload(arguments.get("task", "general context"),arguments.get("task_id"))
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "omega_rag_query":
-                result = _rag_search(arguments["query"], int(arguments.get("top_k", 5)))
+                result = _rag_search(arguments["query"], int(arguments.get("top_k", 5)),arguments.get("task_id"),arguments.get("cross_task",False))
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "omega_ingest":
                 fid = _ingest_fragment(
                     arguments["content"],
                     arguments.get("source", "user"),
-                    arguments.get("tier", "B")
+                    arguments.get("tier", "B"), arguments['task_id'],arguments.get("supersedes"),arguments.get("metadata")
                 )
-                _seal_event("fragment_ingested", {"id": fid, "source": arguments.get("source", "user")})
+                _seal_event("fragment_ingested", {"id": fid, "task_id": arguments["task_id"], "source": arguments.get("source", "user")})
                 return [TextContent(type="text", text=json.dumps({"ingested": True, "fragment_id": fid}))]
 
             elif name == "omega_vault_search":
-                return [TextContent(type="text", text=json.dumps(_vault_search(arguments["query"]), indent=2))]
+                return [TextContent(type="text", text=json.dumps(_vault_search(arguments["query"],arguments.get("task_id"),arguments.get("cross_task",False)), indent=2))]
 
             elif name == "omega_cortex_check":
                 result = _cortex_check(arguments.get("tool",""), arguments.get("args",{}), arguments.get("baseline_prompt",""))
@@ -1359,149 +1187,36 @@ if HAS_MCP:
                     arguments.get("next_steps",[]),
                     arguments.get("conversation_id","")
                 )
-                _STARTUP_PRELOAD["last_session_handoff"] = record
-                _STARTUP_PRELOAD["handoff_present"] = True
                 return [TextContent(type="text", text=json.dumps({
-                    "written": True, "path": str(HANDOFF_FILE),
+                    "written": True, "path": record["path"],
                     "seal": record["seal"][:16] + "...",
-                    "message": "Handoff sealed. Next session auto-loads this context.",
+                    "message": "Task handoff saved; load with the same task_id.",
                 }, indent=2))]
 
             elif name == "omega_execute":
-                # Cortex-wrapped meta-tool: the default execution path
-                target_tool = arguments.get("tool", "")
-                target_args = arguments.get("args", {})
-                baseline    = arguments.get("baseline", "")
+                target=arguments.get('tool','');args=arguments.get('args',{})
+                if target in ('omega_execute','omega_authorize_action') or not target.startswith(('omega_','veritas_')):raise ValueError('Unsupported internal dispatch')
+                definition=next((t for t in await list_tools() if t.name==target),None)
+                if definition is None:raise ValueError('Unknown tool')
+                from jsonschema import validate
+                validate(args,definition.inputSchema)
+                result=await call_tool(target,args)
+                digest=_seal_event('internal_dispatch',{'tool':target,'args_sha256':hashlib.sha256(runtime.canonical(args).encode()).hexdigest(),'task_id':args.get('task_id','system')})
+                return result+[TextContent(type='text',text=json.dumps({'dispatch_seal':digest,'permission_boundary':'internal Brain only'}))]
 
-                if not target_tool:
-                    return [TextContent(type="text", text=json.dumps({"error": "tool is required"}))]
+            elif name == 'omega_authorize_action':
+                return [TextContent(type='text',text=json.dumps(runtime.approval(arguments['tool'],arguments['args'],arguments['task_id'])))]
 
-                # 1. Cortex check
-                steer_result = _cortex_steer(target_tool, target_args, baseline)
-                if not steer_result.get("approved"):
-                    return [TextContent(type="text", text=json.dumps({
-                        "executed": False,
-                        "cortex": steer_result,
-                        "reason": steer_result.get("reason", "BLOCKED"),
-                    }, indent=2))]
-
-                # 2. Use steered args if corrections applied
-                exec_args = steer_result.get("steered_args", target_args)
-
-                # 3. Dispatch to internal tool (Omega Brain tools only)
-                _INTERNAL_DISPATCH = {
-                    "omega_preload_context": lambda a: json.dumps(_brain_preload(a.get("task","general")), indent=2),
-                    "omega_rag_query":       lambda a: json.dumps(_rag_search(a["query"], int(a.get("top_k",5))), indent=2),
-                    "omega_vault_search":    lambda a: json.dumps(_vault_search(a["query"]), indent=2),
-                    "omega_ingest":          lambda a: json.dumps({"ingested": True, "id": _ingest_fragment(a["content"], a.get("source","user"), a.get("tier","B"))}),
-                    "omega_log_session":     lambda a: json.dumps(_vault_log_session(a.get("session_id",""), a.get("task",""), a.get("decisions",[]), a.get("files_modified",[])), indent=2),
-                    "omega_cortex_check":    lambda a: json.dumps(_cortex_check(a.get("tool",""), a.get("args",{}), a.get("baseline_prompt","")), indent=2),
-                    "omega_brain_status":    lambda a: "{}",
-                }
-                # Add VERITAS tools to internal dispatch if available
-                if HAS_BUILD_GATES:
-                    _INTERNAL_DISPATCH.update({
-                        k: (lambda n: lambda a: _handle_veritas_tool(n, a) or "{}")(k)
-                        for k in [
-                            "veritas_intake_gate", "veritas_type_gate", "veritas_dependency_gate",
-                            "veritas_evidence_gate", "veritas_math_gate", "veritas_cost_gate",
-                            "veritas_incentive_gate", "veritas_security_gate", "veritas_adversary_gate",
-                            "veritas_run_pipeline", "veritas_compute_quality", "veritas_mis_greedy",
-                            "veritas_claeg_resolve", "veritas_claeg_transition", "veritas_nafe_scan",
-                        ]
-                    })
-                if target_tool not in _INTERNAL_DISPATCH:
-                    return [TextContent(type="text", text=json.dumps({
-                        "executed": False,
-                        "cortex": steer_result,
-                        "reason": f"omega_execute only wraps Omega Brain tools. '{target_tool}' is external \u2014 use the steered_args to call it yourself.",
-                        "steered_args": exec_args,
-                    }, indent=2))]
-
-                tool_output = _INTERNAL_DISPATCH[target_tool](exec_args)
-
-                # 4. Auto-SEAL every execution
-                seal_h = _seal_event("omega_execute", {
-                    "tool": target_tool,
-                    "cortex_similarity": steer_result.get("similarity"),
-                    "correction_applied": steer_result.get("correction_applied", False),
-                })
-
-                return [TextContent(type="text", text=json.dumps({
-                    "executed": True,
-                    "tool": target_tool,
-                    "cortex": {
-                        "approved": True,
-                        "similarity": steer_result.get("similarity"),
-                        "correction_applied": steer_result.get("correction_applied", False),
-                        "corrections": steer_result.get("corrections", []),
-                    },
-                    "seal_hash": seal_h[:16] + "...",
-                    "result": json.loads(tool_output),
-                }, indent=2))]
+            elif name == 'omega_integrity_status':
+                return [TextContent(type='text',text=json.dumps(runtime.ledger_verify(DB_PATH)))]
 
             elif name == "omega_brain_report":
-                n = int(arguments.get("lines", 10))
-                conn = _db()
-
-                # SEAL chain tail
-                ledger_rows = conn.execute(
-                    "SELECT event_type, hash, timestamp FROM ledger ORDER BY id DESC LIMIT ?", (n,)
-                ).fetchall()
-
-                # Cortex verdict breakdown
-                blocked  = conn.execute("SELECT COUNT(*) FROM ledger WHERE event_type='cortex_steer_block'").fetchone()[0]
-                steered  = conn.execute("SELECT COUNT(*) FROM ledger WHERE event_type='cortex_steer_corrected'").fetchone()[0]
-                approved = conn.execute("SELECT COUNT(*) FROM ledger WHERE event_type='cortex_check' OR event_type='omega_execute'").fetchone()[0]
-
-                # VERITAS: last few RAG queries from tape
-                rag_scores = []
-                tape_rows = conn.execute(
-                    "SELECT payload FROM tape ORDER BY id DESC LIMIT 20"
-                ).fetchall()
-                for row in tape_rows:
-                    try:
-                        p = json.loads(row["payload"])
-                        if "veritas_score" in p:
-                            rag_scores.append(float(p["veritas_score"]))
-                    except Exception:
-                        pass
-
-                # Vault stats
-                sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                entries  = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-                frags    = conn.execute("SELECT COUNT(*) FROM fragments").fetchone()[0]
-                ledger_total = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
-                conn.close()
-
-                avg_veritas = round(sum(rag_scores)/len(rag_scores), 4) if rag_scores else None
-                seal_tail = "\n".join(
-                    f"  {r['timestamp'][:19]}  {r['event_type']:<30} {r['hash'][:16]}..."
-                    for r in reversed(ledger_rows)
-                ) or "  (no entries yet)"
-
-                report = (
-                    f"═══════════════════════════════════════════════════\n"
-                    f"  OMEGA BRAIN AUDIT REPORT\n"
-                    f"  Session: {_SESSION_ID[:16]}...   Engine: {_EMBED_ENGINE}\n"
-                    f"  Generated: {datetime.now(timezone.utc).isoformat()[:19]}Z\n"
-                    f"═══════════════════════════════════════════════════\n\n"
-                    f"CORTEX VERDICTS (all time)\n"
-                    f"  Blocked  : {blocked}\n"
-                    f"  Steered  : {steered}\n"
-                    f"  Approved : {approved}\n\n"
-                    f"VERITAS\n"
-                    f"  Avg score (last {len(rag_scores)} queries): {avg_veritas if avg_veritas is not None else 'n/a'}\n\n"
-                    f"VAULT\n"
-                    f"  Sessions: {sessions}  Entries: {entries}  Fragments: {frags}\n"
-                    f"  Total SEAL entries: {ledger_total}\n\n"
-                    f"SEAL CHAIN TAIL (last {n})\n"
-                    f"  {'TIMESTAMP':<20} {'EVENT':<30} HASH\n"
-                    f"{seal_tail}\n\n"
-                    f"HANDOFF: {'PRESENT ' + chr(0x2713) if _STARTUP_PRELOAD.get('handoff_present') else 'not found'}\n"
-                    f"═══════════════════════════════════════════════════"
-                )
-                return [TextContent(type="text", text=report)]
+                conn=_db()
+                try:
+                    rows=conn.execute('SELECT event_json,hash FROM ledger_v2 ORDER BY id DESC LIMIT ?',(max(1,min(int(arguments.get('lines',10)),100)),)).fetchall()
+                    counts={table:conn.execute('SELECT COUNT(*) FROM '+table).fetchone()[0] for table in ('sessions','entries','fragments','ledger')}
+                finally:conn.close()
+                return [TextContent(type='text',text=json.dumps({'integrity':runtime.ledger_verify(DB_PATH),'counts':counts,'legacy_ledger_status':'preserved_unverified; historical check labels do not establish approval','recent_events':[dict(r) for r in rows],'alignment':'advisory only; permission receipts are enforced by SSWP'}))]
 
             elif name == "omega_ecosystem_status":
                 # Gap #14: unified health across all three systems
@@ -1511,18 +1226,18 @@ if HAS_MCP:
                 fragment_count = conn.execute("SELECT COUNT(*) FROM fragments").fetchone()[0]
                 ledger_count   = conn.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
                 last_seal_row  = conn.execute(
-                    "SELECT hash, timestamp FROM ledger ORDER BY id DESC LIMIT 1"
+                    "SELECT hash,json_extract(event_json,'$.timestamp') timestamp FROM ledger_v2 ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 conn.close()
 
                 brain_status = {
-                    "status": "ONLINE",
+                    "status": "ONLINE", "integrity": runtime.ledger_verify(DB_PATH),
                     "session_id": _SESSION_ID,
                     "call_counter": _CALL_COUNTER,
                     "vault_sessions": session_count,
                     "vault_entries": entry_count,
                     "rag_fragments": fragment_count,
-                    "seal_entries": ledger_count,
+                    "legacy_seal_entries": ledger_count,
                     "embedding_engine": _EMBED_ENGINE,
                     "last_seal": (last_seal_row["hash"][:16] + "..." if last_seal_row else "none"),
                     "last_seal_at": (last_seal_row["timestamp"] if last_seal_row else "never"),
@@ -1552,7 +1267,7 @@ if HAS_MCP:
                 session_age_min = int(
                     (datetime.now(timezone.utc) - _SERVER_START_TS).total_seconds() / 60
                 )
-                break_recommended = session_age_min >= 90 or _CALL_COUNTER >= 60
+                break_recommended = False  # MCP calls and process age do not measure context pressure
                 if session_age_min >= 90:
                     break_reason = (f"Session is {session_age_min} min old — quota pressure likely. "
                                     f"Call omega_seal_task then start a new conversation.")
@@ -1562,7 +1277,7 @@ if HAS_MCP:
                 else:
                     break_reason = ""
                 return [TextContent(type="text", text=json.dumps({
-                    "status": "ONLINE", "mode": "STANDALONE",
+                    "status": "ONLINE", "integrity": runtime.ledger_verify(DB_PATH), "mode": "STANDALONE",
                     "session_id": _SESSION_ID, "call_counter": _CALL_COUNTER,
                     "session_age_minutes":  session_age_min,
                     "break_recommended":    break_recommended,
@@ -1572,7 +1287,7 @@ if HAS_MCP:
                     "embedding_engine": _EMBED_ENGINE,
                     "db_stats": {
                         "sessions": session_count, "entries": entry_count,
-                        "fragments": fragment_count, "ledger_entries": ledger_count,
+                        "fragments": fragment_count, "legacy_ledger_entries": ledger_count,
                         "tape_events": tape_count,
                     },
                     "handoff_present": _STARTUP_PRELOAD.get("handoff_present", False),
@@ -1585,24 +1300,18 @@ if HAS_MCP:
                 if vr is not None:
                     return [TextContent(type="text", text=vr)]
 
-            return [TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
+            raise ValueError(f"Unknown tool: {name}")
 
 
         except Exception as e:
-            log.error(f"Tool {name} error: {e}")
-            import traceback
-            tb = traceback.format_exc()
-            return [TextContent(type="text", text=json.dumps({
-                "error": str(e), "traceback": tb, "tool": name, "veritas_code": "TOOL_ERROR"
-            }))]
-
-    # ── Resources ────────────────────────────────────────────────
+            log.error('Tool %s failed: %s',name,e)
+            raise ValueError(str(e)) from e
 
     @app.list_resources()
     async def list_resources():
         return [
             Resource(uri="omega://session/preload", name="Omega Startup Brain Preload",
-                     description="Auto-fetched at startup: RAG + handoff + vault. Zero manual calls needed.",
+                     description="Task scope instructions; use omega_preload_context with task_id.",
                      mimeType="application/json"),
             Resource(uri="omega://session/handoff", name="Last Session Handoff",
                      description="SHA-256 verified cross-session handoff file.",
@@ -1649,6 +1358,7 @@ if HAS_MCP:
 
     @app.read_resource()
     async def read_resource(uri: str) -> str:
+        uri = str(uri)
         if uri == "omega://session/preload":
             return json.dumps(_STARTUP_PRELOAD, indent=2)
         elif uri == "omega://session/handoff":
@@ -1708,10 +1418,10 @@ if HAS_MCP:
             session_id = m.group(1)
             conn = _db()
             entries = conn.execute(
-                "SELECT content, created_at FROM entries WHERE session_id=? LIMIT 20", (session_id,)
+                "SELECT content, timestamp FROM entries WHERE session_id=? ORDER BY id DESC LIMIT 20", (session_id,)
             ).fetchall()
             ledger = conn.execute(
-                "SELECT context, response, created_at FROM ledger WHERE json_extract(context, '$.session_id')=? LIMIT 20", (session_id,)
+                "SELECT event_json,hash,json_extract(event_json,'$.timestamp') FROM ledger_v2 WHERE json_extract(event_json,'$.task_id')=? ORDER BY id DESC LIMIT 20", (session_id,)
             ).fetchall()
             conn.close()
             return json.dumps({
@@ -1719,21 +1429,21 @@ if HAS_MCP:
                 "entry_count": len(entries),
                 "entries": [{"content": e[0][:500], "created_at": e[1]} for e in entries],
                 "ledger_count": len(ledger),
-                "ledger": [{"context": str(l[0])[:200], "response": str(l[1])[:200], "created_at": l[2]} for l in ledger],
+                "ledger": [{"event": json.loads(l[0]), "hash": l[1], "created_at": l[2]} for l in ledger],
             }, indent=2, default=str)
         m = _re.match(r'^veritas://claim/(.+)$', uri)
         if m:
             claim_id = m.group(1)
             conn = _db()
             row = conn.execute(
-                "SELECT context, response, created_at FROM ledger WHERE json_extract(context, '$.claim_id')=? ORDER BY created_at DESC LIMIT 1", (claim_id,)
+                "SELECT event_json,hash,json_extract(event_json,'$.timestamp') FROM ledger_v2 WHERE json_extract(event_json,'$.payload.claim_id')=? ORDER BY id DESC LIMIT 1", (claim_id,)
             ).fetchone()
             conn.close()
             if row:
                 return json.dumps({
                     "claim_id": claim_id,
-                    "context": str(row[0])[:500],
-                    "response": str(row[1])[:500],
+                    "event": json.loads(row[0]),
+                    "hash": row[1],
                     "created_at": row[2],
                 }, indent=2, default=str)
             return json.dumps({"claim_id": claim_id, "found": False})

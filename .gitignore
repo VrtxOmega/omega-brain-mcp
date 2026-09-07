@@ -27,3 +27,13 @@ venv/
 .vscode/
 .idea/
 *.swp
+
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.key
+.env
+.env.*
+data/
+.sswp.json

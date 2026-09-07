@@ -1,5 +1,2 @@
-mcp>=1.0.0
-uvicorn>=0.30.0
-
-# Optional: better embeddings
-# pip install sentence-transformers numpy
+mcp==1.30.0
+jsonschema>=4,<5

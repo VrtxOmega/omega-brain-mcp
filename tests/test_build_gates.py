@@ -68,11 +68,13 @@ def _minimal_claim(**overrides):
         ],
         "cost": {"build_time_s": 47, "artifact_size_mb": 12, "ci_minutes": 23},
         "cost_bounds": {"build_time_s": 300, "artifact_size_mb": 50, "ci_minutes": 60},
-        "dependencies": {},
-        "security": {"sast": {"critical": 0, "high": 0}, "secrets_detected": [], "unsanitized_inputs": [], "missing_auth": [], "weak_crypto": [], "plaintext_external": []},
-        "attack_suite": {"suite_id": "default", "attacks": []},
+        "dependencies": {"packages": [], "inventory_complete": True, "cve_scan": []},
+        "security": {"scan_status":"complete", "sast": {"critical": 0, "high": 0}, "secrets_detected": [], "unsanitized_inputs": [], "missing_auth": [], "weak_crypto": [], "plaintext_external": []},
+        "attack_suite": {"suite_id": "default", "attacks": [], "not_applicable": True, "rationale":"Synthetic fixture with no required attack coverage"},
         "policy": {"framework_version": "1.0.0", "hash_alg": "sha256", "build_regime": "dev"},
     }
+    for section in ('dependencies','security'):
+        if section in overrides:overrides[section]={**claim[section],**overrides[section]}
     claim.update(overrides)
     return claim
 
@@ -169,7 +171,7 @@ class TestDependencyGate:
 
     def test_medium_cve_model_bound(self):
         claim = _minimal_claim(dependencies={
-            "packages": [{"name": "express", "version": "4.18.0", "registry": "npm", "integrity_hash": "abc"}],
+            "packages": [{"name": "express", "version": "4.18.0", "registry": "npm", "integrity_hash": "abc", "actual_hash":"abc"}],
             "cve_scan": [{"id": "CVE-2024-5678", "severity": "MEDIUM", "package": "express"}],
         })
         r = dependency_gate(claim)
