@@ -801,7 +801,7 @@ def _handle_veritas_tool(name: str, arguments: dict) -> Optional[str]:
         text = arguments.get("text", "")
         result = CLAEG.check_narrative_injection(text)
         if not result["clean"]:
-            _seal_event("nafe_violation", {"flags": result["flags"][:5]})
+            _seal_event("nafe_violation", {"task_id": task_id, "flags": result["flags"][:5]})
         return json.dumps(result, indent=2)
 
     return None
@@ -1314,7 +1314,7 @@ if HAS_MCP:
                      description="Task scope instructions; use omega_preload_context with task_id.",
                      mimeType="application/json"),
             Resource(uri="omega://session/handoff", name="Last Session Handoff",
-                     description="SHA-256 verified cross-session handoff file.",
+                     description="Scope instructions; read omega://task/{task_id}/handoff for a task-specific handoff.",
                      mimeType="application/json"),
             Resource(uri="omega://session/current", name="Current MCP Session",
                      description="Session ID and call count.",
@@ -1342,6 +1342,9 @@ if HAS_MCP:
     @app.list_resource_templates()
     async def list_resource_templates():
         return [
+            ResourceTemplate(uriTemplate="omega://task/{task_id}/handoff",
+                             name="Task Handoff", description="Read only the named task's verified handoff.",
+                             mimeType="application/json"),
             ResourceTemplate(
                 uriTemplate="omega://session/{session_id}",
                 name="Session Lookup",
@@ -1362,8 +1365,13 @@ if HAS_MCP:
         if uri == "omega://session/preload":
             return json.dumps(_STARTUP_PRELOAD, indent=2)
         elif uri == "omega://session/handoff":
-            h = _read_handoff()
-            return json.dumps(h if h else {"handoff_present": False})
+            return json.dumps({"status": "SCOPE_REQUIRED", "uri_template": "omega://task/{task_id}/handoff"})
+        elif re.fullmatch(r"omega://task/[^/]+/handoff", uri):
+            from urllib.parse import unquote
+            task_id = unquote(uri[len("omega://task/"):-len("/handoff")])
+            if not task_id.strip(): raise ValueError("task_id is required")
+            h = _read_handoff(task_id)
+            return json.dumps({"task_id": task_id, "handoff_present": h is not None, "handoff": h})
         elif uri == "omega://session/current":
             return json.dumps({"session_id": _SESSION_ID, "call_counter": _CALL_COUNTER,
                                 "data_dir": str(DATA_DIR)})
@@ -1456,14 +1464,16 @@ if HAS_MCP:
         return [
             Prompt(name="omega_task_start",
                    description="Brief Antigravity at task start. Detects CONTINUATION / CONTEXT_SWITCH / FRESH_START automatically.",
-                   arguments=[PromptArgument(name="task", description="One line: what are you working on?", required=False)]),
+                   arguments=[PromptArgument(name="task_id", description="Stable task identifier", required=True),
+                              PromptArgument(name="task", description="One line: what are you working on?", required=False)]),
             Prompt(name="omega_seal_task",
                    description=(
                        "ONE TAP end-of-session seal. Fully automatic: reads vault tape, "
                        "auto-generates summary, logs to vault, writes S.E.A.L. trace, writes handoff. "
-                       "No fields required. Zero typing."
+                       "Requires the stable task_id; other fields are optional."
                    ),
                    arguments=[
+                       PromptArgument(name="task_id", description="Stable task identifier", required=True),
                        PromptArgument(name="note", description="Optional one-line note appended to auto-summary", required=False)
                    ]),
             Prompt(name="omega_write_handoff",
@@ -1473,6 +1483,7 @@ if HAS_MCP:
                        "omega_seal_task is preferred for quick workflow; this is for detailed records."
                    ),
                    arguments=[
+                       PromptArgument(name="task_id", description="Stable task identifier", required=True),
                        PromptArgument(name="task", description="What was being worked on", required=False),
                        PromptArgument(name="decisions", description="Key decisions made (comma-separated)", required=False),
                        PromptArgument(name="next_steps", description="What to do next session (comma-separated)", required=False),
@@ -1483,14 +1494,17 @@ if HAS_MCP:
     @app.get_prompt()
     async def get_prompt(name: str, arguments: dict) -> dict:
         arguments = arguments or {}
+        task_id = arguments.get("task_id")
+        if name in {"omega_task_start", "omega_seal_task", "omega_write_handoff"}:
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("task_id is required for task-scoped prompts")
 
         if name == "omega_task_start":
             task = arguments.get("task", "").strip() or "general workspace context"
-            preload = _brain_preload(task)
+            preload = _brain_preload(task, task_id)
             handoff = preload.get("last_session_handoff", {})
             mode, overlap = _detect_context_mode(task, handoff)
-            rag_count = len(preload.get("rag_fragments", []))
-            veritas = preload.get("veritas_score", 0.0)
+            rag_count = len(preload.get("rag", {}).get("fragments", []))
 
             if mode == "CONTINUATION":
                 files_preview = ", ".join((handoff.get("files_modified") or [])[:4]) or "none"
@@ -1502,20 +1516,20 @@ if HAS_MCP:
                     f"Files: {files_preview}\n"
                     f"Decisions:\n  {decisions_preview}\n"
                     f"Next steps: {next_preview}\n\n"
-                    f"RAG: {rag_count} fragments | VERITAS {veritas:.2f}"
+                    f"RAG: {rag_count} task-scoped fragments (lexical relevance)"
                 )
             elif mode == "CONTEXT_SWITCH":
                 briefing = (
                     f"◀ CONTEXT SWITCH → {task}\n\n"
                     f"Previous: {handoff.get('task','')}\n"
                     f"Summary: {handoff.get('summary','')[:200]}\n\n"
-                    f"RAG: {rag_count} fragments | VERITAS {veritas:.2f}"
+                    f"RAG: {rag_count} task-scoped fragments (lexical relevance)"
                 )
             else:
                 briefing = (
                     f"★ NEW: {task}\n\n"
                     f"No prior session for this context.\n"
-                    f"RAG: {rag_count} fragments | VERITAS {veritas:.2f}"
+                    f"RAG: {rag_count} task-scoped fragments (lexical relevance)"
                 )
 
             return {"messages": [PromptMessage(role="user",
@@ -1524,16 +1538,14 @@ if HAS_MCP:
         elif name == "omega_seal_task":
             # Fully automatic — hits autoseal, no user input needed
             note = arguments.get("note", "").strip()
-            auto = _vault_autoseal(_SESSION_ID, note)
+            auto = _vault_autoseal(task_id, note)
             task     = auto.get("task", note or "session")
             summary  = auto.get("summary", task)
             decisions = auto.get("decisions", [])
             files    = auto.get("files_modified", [])
-            _vault_log_session(_SESSION_ID, task, decisions, files)
-            _seal_run({"task": task, "session_id": _SESSION_ID}, summary)
-            record = _write_handoff(task, summary, decisions, files, [], _SESSION_ID)
-            _STARTUP_PRELOAD["last_session_handoff"] = record
-            _STARTUP_PRELOAD["handoff_present"] = True
+            _vault_log_session(task_id, task, decisions, files)
+            _seal_run({"task": task, "session_id": task_id}, summary)
+            record = _write_handoff(task, summary, decisions, files, [], task_id)
             files_short = (", ".join(files[:4]) + (" ..." if len(files) > 4 else "")) if files else "none"
             return {"messages": [PromptMessage(role="user", content=TextContent(type="text", text=(
                 f"OMEGA SEALED ✓ (auto)\n"
@@ -1552,18 +1564,16 @@ if HAS_MCP:
             next_steps = [s.strip() for s in next_raw.split(",") if s.strip()] if next_raw else []
             files = [f.strip() for f in files_raw.split(",") if f.strip()] if files_raw else []
             # Fall back to autoseal for missing fields
-            auto = _vault_autoseal(_SESSION_ID, task_arg)
+            auto = _vault_autoseal(task_id, task_arg)
             task = task_arg or auto.get("task", "session")
             summary = auto.get("summary", task)
             if not decisions:
                 decisions = auto.get("decisions", [])
             if not files:
                 files = auto.get("files_modified", [])
-            _vault_log_session(_SESSION_ID, task, decisions, files)
-            _seal_run({"task": task, "session_id": _SESSION_ID}, summary)
-            record = _write_handoff(task, summary, decisions, files, next_steps, _SESSION_ID)
-            _STARTUP_PRELOAD["last_session_handoff"] = record
-            _STARTUP_PRELOAD["handoff_present"] = True
+            _vault_log_session(task_id, task, decisions, files)
+            _seal_run({"task": task, "session_id": task_id}, summary)
+            record = _write_handoff(task, summary, decisions, files, next_steps, task_id)
             return {"messages": [PromptMessage(role="user", content=TextContent(type="text", text=(
                 f"OMEGA HANDOFF SEALED ✓ (structured)\n"
                 f"Task: {task[:80]}\n"
