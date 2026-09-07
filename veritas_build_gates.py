@@ -591,11 +591,16 @@ def dependency_gate(claim: dict) -> dict:
     deps = claim.get("dependencies", {})
 
     if not deps:
-        # No dependencies declared — pass (standalone artifact)
-        return gate_result("DEPENDENCY", Verdict.PASS, details={"packages": 0})
+        return gate_result("DEPENDENCY", Verdict.INCONCLUSIVE, ["DEPENDENCY_EVIDENCE_MISSING"], details={"evidence_basis":"caller-supplied; no independent scan"})
 
     packages = deps.get("packages", [])
     verdict = Verdict.PASS
+    if deps.get('inventory_complete') is not True or 'cve_scan' not in deps:
+        reasons.append('DEPENDENCY_COVERAGE_UNDECLARED')
+        verdict = Verdict.INCONCLUSIVE
+    if any(not p.get('integrity_hash') or not p.get('actual_hash') for p in packages):
+        reasons.append('INTEGRITY_EVIDENCE_MISSING')
+        verdict = Verdict.worst(verdict, Verdict.INCONCLUSIVE)
 
     # 2. Verify integrity hashes
     for pkg in packages:
@@ -1157,6 +1162,10 @@ def security_gate(claim: dict) -> dict:
     witnesses = []
     verdict = Verdict.PASS
     security = claim.get("security", {})
+    required_fields=('sast','secrets_detected','unsanitized_inputs','missing_auth','weak_crypto','plaintext_external')
+    if security.get('scan_status')!='complete' or any(key not in security for key in required_fields):
+        reasons.append('SECURITY_COVERAGE_UNDECLARED')
+        verdict = Verdict.INCONCLUSIVE
 
     # 1. SAST
     sast = security.get("sast", {})
@@ -1228,7 +1237,8 @@ def adversary_gate(claim: dict) -> dict:
     attacks = attack_suite.get("attacks", [])
 
     if not attacks:
-        return gate_result("ADVERSARY", Verdict.PASS, details={"attacks": 0})
+        applicable=not (attack_suite.get('not_applicable') is True and attack_suite.get('rationale'))
+        return gate_result("ADVERSARY", Verdict.INCONCLUSIVE if applicable else Verdict.PASS, ['ATTACK_EVIDENCE_MISSING'] if applicable else [], details={"attacks":0,"evidence_basis":"caller-declared applicability"})
 
     # compute baseline
     b_ev = evidence_gate(claim)
@@ -1244,19 +1254,20 @@ def adversary_gate(claim: dict) -> dict:
         transform = attack.get("transform", {})
         category = attack.get("category", "")
         t_type = transform.get("type", category)
-        result = attack.get("result", {}) or {}
-
-        # Inspect terminal attack outcomes before running transforms
-        if category == "fuzz" and result.get("crash") is True:
-            reasons.append("FUZZ_CRASH")
-            witnesses.append({"attack": aid, "category": category, "result": result})
-            return gate_result("ADVERSARY", Verdict.VIOLATION, reasons, witnesses)
-
-        if category == "exploit" and result.get("succeeded") is True:
-            reasons.append("EXPLOIT_SUCCESS")
-            witnesses.append({"attack": aid, "category": category, "result": result})
-            return gate_result("ADVERSARY", Verdict.VIOLATION, reasons, witnesses)
-
+        if t_type in ('FuzzInput','ExploitVector'):
+            supplied=attack.get('result',{})
+            failure=supplied.get('crash') if t_type=='FuzzInput' else supplied.get('succeeded')
+            if failure is True:
+                verdict=Verdict.worst(verdict,Verdict.VIOLATION)
+                reasons.append('FUZZ_CRASH' if t_type=='FuzzInput' else 'EXPLOIT_SUCCESS')
+                witnesses.append({'attack':aid,'result':supplied,'evidence_basis':'caller-supplied observation'})
+                degrading_count+=1
+            elif failure is not False:
+                verdict=Verdict.worst(verdict,Verdict.INCONCLUSIVE);reasons.append('ATTACK_RESULT_MISSING')
+            continue
+        if t_type not in ('InflateBound','RemoveEvidence','PerturbParam','PerturbEvidence'):
+            verdict=Verdict.worst(verdict,Verdict.INCONCLUSIVE);reasons.append('UNSUPPORTED_ATTACK_TRANSFORM');continue
+        
         claim_a = copy.deepcopy(claim)
         
         # Apply transform
